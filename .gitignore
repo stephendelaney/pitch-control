@@ -1,0 +1,58 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+
+# Environments / secrets
+.env
+.env.*
+*.local
+secrets.*
+*.pem
+
+# dlt
+.dlt/secrets.toml
+
+# dbt
+target/
+dbt_packages/
+logs/
+.user.yml
+
+# DuckDB local artifacts
+*.duckdb
+*.duckdb.wal
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+
+# Data / lake artifacts (local)
+*.parquet
+data/
+tmp/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.cache/
+
+# IDE
+.idea/
+.vscode/
