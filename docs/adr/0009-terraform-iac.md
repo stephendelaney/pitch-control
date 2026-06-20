@@ -29,6 +29,7 @@ OIDC-assumed role with least-privilege policies. No long-lived AWS access keys e
 | Option | Pros | Cons |
 |---|---|---|
 | **Terraform + S3 state + OIDC (chosen)** | $0; ubiquitous, the IaC skill to learn; mature AWS provider; S3 remote state is free + durable; OIDC = no static keys (the auth ADR-0007 needs); plan/apply review fits the PR/CI flow | HCL + state management to learn; state/locking must be set up carefully; drift is on us to watch |
+| OpenTofu (open-source Terraform fork) | Drop-in (same HCL/providers/state); truly open source (MPL) after Terraform's BSL relicense; free; growing adoption | Less name recognition for a portfolio audience — chose Terraform for the **CV-recognizable** skill; otherwise interchangeable, so this stays an easy switch later |
 | AWS CDK (TypeScript/Python) | Real-language IaC, good AWS ergonomics | CloudFormation under the hood (slower, AWS-only); less of the portable, conventional IaC skill; another runtime in CI |
 | Pulumi | Real-language IaC, multi-cloud | Free tier centers on Pulumi-hosted state/SaaS; smaller ecosystem; Terraform is the more standard learning target |
 | Raw CloudFormation | Native AWS, no extra tool | Verbose; AWS-locked; weaker module ecosystem; least transferable skill |

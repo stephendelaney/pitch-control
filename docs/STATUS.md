@@ -5,8 +5,10 @@
 
 ## Current phase
 
-**Phase 0 — Architecture & decision groundwork (complete).** Full ADR decision log ratified (0001–0018
-all ✅ Accepted). No code yet; next is `git init` + Wk 1 Terraform skeleton.
+**Phase 0 complete + repo live.** Full ADR decision log ratified (0001–0018 all ✅ Accepted), and the
+repo is now on GitHub: **[github.com/stephendelaney/pitch-control](https://github.com/stephendelaney/pitch-control)**
+(public, `main`). Project named **`pitch-control`** (local folder stays `just-for-fun`; remote name
+differs deliberately). No application code yet; next is **Wk 1 Terraform skeleton**.
 
 ## What exists
 
@@ -46,9 +48,10 @@ all ✅ Accepted). No code yet; next is `git init` + Wk 1 Terraform skeleton.
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE:** docs phase is **complete** — every ADR is Accepted. Next is
-> **`git init` + push to GitHub**, then start Wk 1 (Terraform skeleton: RDS Postgres, S3 medallion,
-> IAM/OIDC; seed schema; PostHog SDK wired).
+> ⏭️ **NEXT SESSION STARTS HERE:** docs phase complete + repo is live on GitHub. Next is **Wk 1 —
+> Terraform skeleton** (RDS Postgres, S3 medallion buckets, IAM/OIDC; seed schema; PostHog SDK wired).
+> NB: `terraform` and `gh` are **not installed** locally — install before `terraform plan`/applies.
+> Stephen runs all git/repo actions himself (give commands, don't execute) — see memory.
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.
@@ -61,7 +64,9 @@ all ✅ Accepted). No code yet; next is `git init` + Wk 1 Terraform skeleton.
   ADR-0015 (cold-start tradeoff + keep-warm mitigation + Wk-1 keep-warm intent) and ADR-0014
   (CloudFront is load-bearing for HTTPS/TLS + private-bucket-via-OAC, not just CDN). **Decision log now
   fully Accepted.**
-- [ ] `git init` + push to GitHub now that docs are complete.
+- [x] **`git init` + first push to GitHub** — repo live at `stephendelaney/pitch-control` (public),
+  2026-06-19. Added top-level README, stack-scoped `.gitignore` (OS/editor moved to
+  `~/.gitignore_global`; `.terraform.lock.hcl` committed), repo topics set.
 
 ## Learning tracks
 
