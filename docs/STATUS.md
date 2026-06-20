@@ -50,8 +50,8 @@ differs deliberately). No application code yet; next is **Wk 1 Terraform skeleto
 
 > ⏭️ **NEXT SESSION STARTS HERE:** docs phase complete + repo is live on GitHub. Next is **Wk 1 —
 > Terraform skeleton** (RDS Postgres, S3 medallion buckets, IAM/OIDC; seed schema; PostHog SDK wired).
-> NB: `terraform` and `gh` are **not installed** locally — install before `terraform plan`/applies.
-> Stephen runs all git/repo actions himself (give commands, don't execute) — see memory.
+> NB: `terraform` **v1.15.6 installed** ✅ (via `hashicorp/tap`); `gh` still not installed (SSH used
+> for git, so optional). Stephen runs all git/repo actions himself (give commands, don't execute) — see memory.
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.
