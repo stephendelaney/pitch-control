@@ -1,4 +1,6 @@
-# just-for-fun
+# pitch-control
+
+> A soccer-manager data platform — Medallion lake + CDP + identity stitching, with an ADR behind every decision.
 
 A personal **football-manager / fantasy-GM data platform** — buy/sell players, set lineups, track
 gameweek performance — built as a vehicle for practicing production data-engineering and SRE
