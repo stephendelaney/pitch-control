@@ -1,5 +1,6 @@
-# macOS
-.DS_Store
+# OS junk and editor/IDE files live in the global gitignore
+# (~/.gitignore_global via git config --global core.excludesfile).
+# This file is only for artifacts produced by this project's stack.
 
 # Python
 __pycache__/
@@ -31,9 +32,8 @@ logs/
 *.duckdb
 *.duckdb.wal
 
-# Terraform
+# Terraform — NB: .terraform.lock.hcl IS committed (pins provider versions)
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -52,7 +52,3 @@ node_modules/
 dist/
 build/
 .cache/
-
-# IDE
-.idea/
-.vscode/
