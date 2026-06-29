@@ -56,3 +56,38 @@ triggers). GitHub Actions is the control plane; Lambda is a worker for AWS-bound
   here), ADR-0012 (SLOs — pipeline-success/freshness SLIs are measured from runs orchestrated here).
   Observability via `ops.pipeline_runs` + elementary is a roadmap Wk 3 item. Runbook:
   [`runbooks/bronze-load-failure.md`](../runbooks/bronze-load-failure.md).
+
+## Amendment — 2026-06-29 (Proposed)
+
+> Status: **Proposed** (awaiting ratification). Extends the Consequences above; does not change the
+> chosen decision. Lambda remains the default worker.
+
+**Worker-compute overflow target: AWS Fargate (per-step), not EC2.** The original decision names
+orchestration complexity ("`needs:` graphs outgrow ~dozens of tasks") as the trigger to revisit. This
+amendment adds the **other** axis on which Lambda can be outgrown — **per-step resource and runtime
+limits** — and fixes the target so it isn't decided under incident pressure:
+
+- **The limits that bite the data path.** Lambda caps a single invocation at **15 min wall-clock**,
+  **10 GB memory** (CPU scales with memory), and **10 GB `/tmp`** scratch. DuckDB (ADR-0004) is
+  deliberately memory- and local-disk-hungry and spills to disk under pressure, so a cold/full
+  **dbt build** or a **dlt backfill** over a season of history is the realistic way a step crosses
+  these ceilings. The 15-min cap is a **cliff, not a slope**: the job is *killed mid-run*, which then
+  surfaces as a breached freshness SLO (ADR-0012) — i.e. you learn by failing.
+- **Migrate on a leading indicator, not the SLO.** Because the timeout is a hard cliff, the trip-wire
+  is a **capacity leading indicator**, not the lagging freshness SLO. From `ops.pipeline_runs`
+  (already capturing per-run timings), derive **step duration as % of the 15-min cap** and **peak
+  memory as % of 10 GB**; alert at **~70%**. That fires *before* the kill, turning a migration into
+  planned work instead of an incident. (The SLO/error-budget path in ADR-0012 remains the right
+  governor for *gradual* degradation — e.g. API cold-start p99 tail — but not for this hard limit.)
+- **Why Fargate and not EC2.** Fargate keeps the no-server-management ops win (no AMI, no patching, no
+  SSH surface) while removing the 15-min ceiling and lifting memory/CPU (≤120 GB). The move is
+  **per-step**: only the one job that outgrew the box goes to Fargate; the rest of the DAG stays
+  Lambda-default, still driven by GitHub Actions. EC2 is rejected for the same standing-infra/ops
+  reasons as the original ADR.
+- **Cost honesty.** Fargate has **no always-free tier** — it bills per vCPU-second/GB-second *while a
+  task runs*. For short, low-frequency batch the cost is small and bounded by run duration (no idle
+  charge), so it stays within the spirit of the $0 constraint, but it is **not literally $0** and
+  should be acknowledged when the first step migrates.
+
+See also the ADR-0002 amendment (2026-06-29) for the Lambda→RDS connection-management mitigation that
+the dlt-from-Postgres step depends on.

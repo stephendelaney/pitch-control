@@ -37,3 +37,28 @@ columns for semi-structured landing data and relational tables for modeled trans
   because Postgres is both the stronger architectural fit *and* the more-familiar engine — low risk.
 - **Follow-ups:** ADR-0013 (identity stitching) depends on this; schema lives in `infra/` (Terraform)
   and `app/` migrations.
+
+## Amendment — 2026-06-29 (Proposed)
+
+> Status: **Proposed** (awaiting ratification). Adds an operational guardrail; does not change the
+> chosen engine.
+
+**Lambda→Postgres connection management.** Both the API (ADR-0015) and the dlt-from-Postgres read path
+(ADR-0010) reach RDS from **Lambda**, which scales horizontally by default — each concurrent function
+opens its own connection. Against a free-tier **`db.t4g.micro`** with a low `max_connections`, an
+unbounded fan-out causes **connection exhaustion / storms** (failed connects, not slow queries). This
+is a known Lambda+RDS footgun and is called out here so it's designed in, not discovered in an
+incident.
+
+Mitigation, **$0-first**:
+
+1. **Cap the fan-out.** Set **reserved concurrency** on the RDS-touching Lambdas to a small number so
+   peak connections stay well under `max_connections`. (Free.)
+2. **Reuse the connection.** Open the pool/connection **outside the handler** (in the execution
+   context) so warm invocations reuse it; keep pools tiny (1–2); set short idle timeouts. (Free.)
+3. **Escalation — RDS Proxy.** The managed answer (pooling/multiplexing in front of RDS) is **RDS
+   Proxy**, but it is **not free** (≈ $0.015/vCPU-hr), so it **violates the $0 constraint** and is
+   deferred. Adopt it only if (1)+(2) prove insufficient or when budget allows — it's the documented
+   escalation, not the default.
+
+Related: ADR-0007 amendment (2026-06-29), ADR-0010 (dlt), ADR-0015 (API Lambda).
