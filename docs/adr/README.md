@@ -25,6 +25,7 @@ Significant decisions are recorded here using [MADR-lite](template.md). ADRs are
 | [0016](0016-cognito-auth.md) | Auth & user identity — Amazon Cognito | ✅ Accepted |
 | [0017](0017-scoring-source.md) | Scoring source — ingest FPL `event_points` vs compute ourselves | ✅ Accepted |
 | [0018](0018-transfer-economy-model.md) | Transfer & economy model — mirror FPL vs simplify | ✅ Accepted |
+| [0019](0019-secret-management.md) | Secret management — 1Password (source of truth) + SSM runtime store | ✅ Accepted |
 
 **Status legend:** ✅ Accepted · 📝 Proposed (decision leaning made, rationale not yet written) ·
 🔄 Superseded · ⚠️ Deprecated

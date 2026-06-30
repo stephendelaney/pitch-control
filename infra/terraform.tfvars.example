@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars (gitignored) for NON-secret overrides only.
+# The real terraform.tfvars is ignored by git (see repo .gitignore); only this .example is tracked.
+#
+# SECRETS DO NOT GO IN THIS FILE (ADR-0019). 1Password is the source of truth; inject at runtime:
+#   export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
+#   export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
+# or run terraform under `op run --env-file=infra/.env -- terraform …` with op:// references.
+
+# Lock Postgres ingress to your current public IP. Prefer the env var above; this placeholder
+# is the RFC 5737 TEST-NET range (never a real address) — replace only if you must set it here.
+allowed_cidrs = ["203.0.113.4/32"]
+
+# db_password: NO on-disk value. Set TF_VAR_db_password from 1Password (see header).
+
+# Optional NON-secret overrides (defaults shown):
+# aws_region  = "us-east-1"
+# db_name     = "pitchcontrol"
+# db_username = "pitchadmin"
+# pg_version  = "16"
