@@ -8,12 +8,12 @@ Significant decisions are recorded here using [MADR-lite](template.md). ADRs are
 | ADR | Decision | Status |
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions (meta) | ✅ Accepted |
-| [0002](0002-postgres-jsonb-system-of-record.md) | PostgreSQL + JSONB for system of record | ✅ Accepted |
+| [0002](0002-postgres-jsonb-system-of-record.md) | PostgreSQL + JSONB for system of record | ✅ Accepted · +amendment 2026-06-30 (Lambda→RDS conn mgmt) |
 | [0003](0003-s3-parquet-medallion-lake.md) | S3 + Parquet Medallion lake (Bronze/Silver/Gold) | ✅ Accepted |
 | [0004](0004-duckdb-warehouse-engine.md) | DuckDB as warehouse engine (vs Athena / Redshift) | ✅ Accepted |
 | [0005](0005-dbt-transformations.md) | dbt for transformations | ✅ Accepted |
 | [0006](0006-posthog-cdp.md) | PostHog as product analytics + CDP | ✅ Accepted |
-| [0007](0007-github-actions-lambda-orchestration.md) | GitHub Actions + Lambda orchestration (vs Airflow / MWAA) | ✅ Accepted |
+| [0007](0007-github-actions-lambda-orchestration.md) | GitHub Actions + Lambda orchestration (vs Airflow / MWAA) | ✅ Accepted · +amendment 2026-06-30 (Fargate per-step overflow) |
 | [0008](0008-metabase-bi.md) | Metabase (local Docker) for BI | ✅ Accepted |
 | [0009](0009-terraform-iac.md) | Terraform for IaC | ✅ Accepted |
 | [0010](0010-dlt-ingestion.md) | dlt for ingestion | ✅ Accepted |

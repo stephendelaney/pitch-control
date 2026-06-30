@@ -38,9 +38,9 @@ columns for semi-structured landing data and relational tables for modeled trans
 - **Follow-ups:** ADR-0013 (identity stitching) depends on this; schema lives in `infra/` (Terraform)
   and `app/` migrations.
 
-## Amendment — 2026-06-29 (Proposed)
+## Amendment — 2026-06-29 (Accepted)
 
-> Status: **Proposed** (awaiting ratification). Adds an operational guardrail; does not change the
+> Status: **✅ Accepted** (ratified 2026-06-30). Adds an operational guardrail; does not change the
 > chosen engine.
 
 **Lambda→Postgres connection management.** Both the API (ADR-0015) and the dlt-from-Postgres read path

@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-06-19** (evening).
+> it is what lets a fresh session orient in seconds. Last updated: **2026-06-30**.
 
 ## Current phase
 
@@ -45,6 +45,7 @@ differs deliberately). No application code yet; next is **Wk 1 Terraform skeleto
 | ADRs | State |
 |---|---|
 | 0001–0018 | ✅ Accepted — **full decision log ratified** |
+| 0002, 0007 amendments (2026-06-29) | ✅ Accepted — ratified 2026-06-30 (Lambda→RDS conn mgmt; Fargate per-step overflow) |
 
 ## Immediate next actions
 
@@ -67,6 +68,13 @@ differs deliberately). No application code yet; next is **Wk 1 Terraform skeleto
 - [x] **`git init` + first push to GitHub** — repo live at `stephendelaney/pitch-control` (public),
   2026-06-19. Added top-level README, stack-scoped `.gitignore` (OS/editor moved to
   `~/.gitignore_global`; `.terraform.lock.hcl` committed), repo topics set.
+- [x] **Drafted two operational amendments** (2026-06-29): ADR-0002 (Lambda→RDS connection
+  management — reserved concurrency + handler-scoped reuse; RDS Proxy as non-free escalation) and
+  ADR-0007 (Fargate as per-step compute-overflow target; 70%-of-15-min-cap leading indicator from
+  `ops.pipeline_runs` as the migration trip-wire).
+- [x] **Ratified both amendments** — flipped to ✅ Accepted, 2026-06-30. Both are operational
+  guardrails; neither changes a chosen technology. These now feed Wk 1 (reserved concurrency on
+  RDS-touching Lambdas) and Wk 3 (capacity SLIs in `ops.pipeline_runs`).
 
 ## Learning tracks
 

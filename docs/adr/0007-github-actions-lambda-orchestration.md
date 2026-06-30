@@ -57,9 +57,9 @@ triggers). GitHub Actions is the control plane; Lambda is a worker for AWS-bound
   Observability via `ops.pipeline_runs` + elementary is a roadmap Wk 3 item. Runbook:
   [`runbooks/bronze-load-failure.md`](../runbooks/bronze-load-failure.md).
 
-## Amendment — 2026-06-29 (Proposed)
+## Amendment — 2026-06-29 (Accepted)
 
-> Status: **Proposed** (awaiting ratification). Extends the Consequences above; does not change the
+> Status: **✅ Accepted** (ratified 2026-06-30). Extends the Consequences above; does not change the
 > chosen decision. Lambda remains the default worker.
 
 **Worker-compute overflow target: AWS Fargate (per-step), not EC2.** The original decision names
