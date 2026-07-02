@@ -50,6 +50,11 @@ resource "aws_s3_bucket_versioning" "lake" {
 resource "aws_s3_bucket_lifecycle_configuration" "lake" {
   bucket = aws_s3_bucket.lake.id
 
+  # The noncurrent_version_expiration rule below is only meaningful once versioning is Enabled.
+  # Both resources reference only the bucket, so Terraform could otherwise apply them in parallel;
+  # this makes the ordering explicit.
+  depends_on = [aws_s3_bucket_versioning.lake]
+
   rule {
     id     = "abort-incomplete-multipart"
     status = "Enabled"

@@ -19,8 +19,10 @@ resource "aws_db_instance" "postgres" {
   engine_version = var.pg_version
   instance_class = "db.t4g.micro" # free-tier eligible
 
-  allocated_storage = 20 # free-tier: up to 20 GB
-  storage_type      = "gp3"
+  allocated_storage = 20    # free-tier: up to 20 GB
+  storage_type      = "gp2" # AWS documents the RDS free tier as 20 GB of gp2; gp3 coverage is
+  # ambiguous, so we match the documented type to keep the $0 guarantee airtight (gp2 supports
+  # encryption, backups, etc. identically). Revisit gp3 if we ever outgrow free-tier storage.
   storage_encrypted = true # KMS default key — no extra cost
 
   db_name  = var.db_name

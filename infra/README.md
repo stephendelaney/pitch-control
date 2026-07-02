@@ -23,9 +23,33 @@ reproducible from zero (ADR-0009).
   reconciled in Wk 5 when CI/OIDC deploys land.
 - **Default VPC, public RDS, IP-locked SG** — simplest reachable Postgres for local dev/dbt. A
   dedicated private-subnet VPC is a later upgrade.
-- **$0 posture** — free-tier instance/storage; SSE-S3 (no KMS cost); no Performance Insights; no
-  RDS Proxy / Secrets Manager (ADR-0002 names RDS Proxy as a non-free escalation; ADR-0019 names
-  Secrets Manager as the paid secret-store escalation). 1Password is already paid → $0 marginal.
+- **$0 posture** — free-tier instance (`db.t4g.micro`) + `gp2` storage (the documented free-tier
+  type); SSE-S3 (no KMS cost); no Performance Insights; no RDS Proxy / Secrets Manager (ADR-0002
+  names RDS Proxy as a non-free escalation; ADR-0019 names Secrets Manager as the paid secret-store
+  escalation). 1Password is already paid → $0 marginal.
+  > ⚠️ **"$0" is account-age-dependent, not structural.** The RDS instance, its storage, and S3 are
+  > **12-month** free tier (newer accounts: a ~6-month credit model), *not* always-free. On an AWS
+  > account older than its free-tier window this apply bills ~**$12–13/mo** for the instance alone.
+  > The config is $0 by construction; the *account* is the variable. Check age in pre-flight (below).
+
+## Pre-flight (run before `terraform apply` — cheap CLI checks, no resources created)
+
+Two of these guard against a **hard apply failure**; the third guards the **$0 assumption**.
+
+```bash
+# 1. Default VPC must exist — network.tf depends on it. Empty output = hard failure at plan time.
+aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[].VpcId' --output text
+#   If empty: `aws ec2 create-default-vpc` (or point network.tf at a real VPC/subnets).
+
+# 2. Only ONE GitHub OIDC provider is allowed per account — iam_oidc.tf creates one.
+aws iam list-open-id-connect-providers
+#   If a token.actions.githubusercontent.com provider already exists: swap the resource in
+#   iam_oidc.tf for a `data "aws_iam_openid_connect_provider"` and reference its ARN (avoids
+#   EntityAlreadyExists).
+
+# 3. Account age → is this still inside the 12-month free-tier window? (See $0 caveat above.)
+aws iam list-users --query 'Users[0].CreateDate' --output text 2>/dev/null || echo "no IAM users — check the account's signup date in Billing console"
+```
 
 ## Prerequisites
 

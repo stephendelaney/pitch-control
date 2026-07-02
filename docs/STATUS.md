@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-06-30**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-02**.
 
 ## Current phase
 
@@ -14,6 +14,10 @@ differs deliberately). Infra in **`infra/`** is `fmt`+`validate` clean, **review
 TEST-NET placeholder), and **committed + pushed** (`339aa63`). Still **not applied** — no billable AWS
 resources exist yet. **ADR-0019 (secret management)** ratified: 1Password = source of truth, SSM
 `SecureString` = Lambda runtime store; infra docs moved to the `op`-based, no-secrets-on-disk workflow.
+**Second pre-flight review 2026-07-02 (UNCOMMITTED — needs Stephen's commit):** added two apply-blocker
+checks to pre-flight (default-VPC existence; account-age → $0 is 12-month, not always-free) + config
+tweaks — RDS storage `gp3 → gp2` (documented free-tier type) and S3 lifecycle `depends_on` versioning.
+Changed files: `infra/rds.tf`, `infra/s3.tf`, `infra/README.md`, `docs/STATUS.md`.
 
 ## What exists
 
@@ -59,13 +63,20 @@ resources exist yet. **ADR-0019 (secret management)** ratified: 1Password = sour
 > reviewed, committed, and pushed (`339aa63`); decision log is fully Accepted (0001–0019). The next
 > move is to **stand the infra up**. Resume by: (0) **housekeeping** — store the RDS master password in
 > 1Password at `op://pitch-control/rds-master/password` (the path the infra docs now reference);
-> (1) **pre-flight** `aws iam list-open-id-connect-providers` — AWS allows only **one** GitHub OIDC
-> provider per account, so if one already exists, `apply` collides (switch to a `data` source + import);
+> (1) **pre-flight — three cheap CLI checks (full block in `infra/README.md`):**
+> (a) `aws ec2 describe-vpcs --filters Name=isDefault,Values=true` — `network.tf` **requires a default
+> VPC**; empty output = hard failure at plan time (`aws ec2 create-default-vpc` to fix);
+> (b) `aws iam list-open-id-connect-providers` — AWS allows only **one** GitHub OIDC provider per
+> account, so if one already exists, `apply` collides (switch to a `data` source + import);
+> (c) **account age** — RDS/S3 free tier is **12-month, not always-free**; on an account past its
+> window this apply bills **~$12–13/mo** for the instance alone (the config is $0 by construction, the
+> *account* is the variable);
 > (2) **set inputs from 1Password** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`
 > and `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`); (3) `terraform init` →
 > `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
 > Confirmed at review (no longer open): AWS provider `~> 5.0` and `pg_version = "16"` (major-only) — both
-> deliberate. NB: `terraform` **v1.15.6 installed** ✅; `op` (1Password CLI) needed for step 2; `gh` still
+> deliberate; RDS storage switched **gp3 → gp2** (documented free-tier type); S3 lifecycle now
+> `depends_on` versioning. NB: `terraform` **v1.15.6 installed** ✅; `op` (1Password CLI) needed for step 2; `gh` still
 > not installed (SSH used for git, optional). Deliberate Wk-1 deviations, documented in `infra/README.md`
 > + `backend.tf`: **local state** (not S3 per ADR-0009 → reconcile Wk 5) and **no Lambda
 > reserved-concurrency** yet (no Lambdas in Wk 1; ADR-0002 amendment caps land with the API/dlt).
