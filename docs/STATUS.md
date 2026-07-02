@@ -5,14 +5,15 @@
 
 ## Current phase
 
-**Wk 1 in progress — Terraform skeleton scaffolded + reviewed, NOT yet committed or applied.** Phase 0
-docs complete + decision log ratified (0001–0018 + the two 2026-06-29 amendments, all ✅ Accepted). Repo
-live: **[github.com/stephendelaney/pitch-control](https://github.com/stephendelaney/pitch-control)**
+**Wk 1 in progress — Terraform skeleton reviewed + committed + pushed; NOT yet applied.** Phase 0
+docs complete + decision log ratified (0001–**0019**, all ✅ Accepted). Repo live:
+**[github.com/stephendelaney/pitch-control](https://github.com/stephendelaney/pitch-control)**
 (public, `main`). Project named **`pitch-control`** (local folder stays `just-for-fun`; remote name
-differs deliberately). First infra code now exists in **`infra/`** (`fmt`+`validate` clean), **reviewed
-2026-06-30** (dead `aws_region` data source removed; accidental real IP in `terraform.tfvars.example`
-reverted to the TEST-NET placeholder) but still **uncommitted in the working tree** and **not applied**.
-New: **ADR-0019 (secret management)** drafted as Proposed.
+differs deliberately). Infra in **`infra/`** is `fmt`+`validate` clean, **reviewed 2026-06-30** (dead
+`aws_region` data source removed; accidental real IP in `terraform.tfvars.example` reverted to the
+TEST-NET placeholder), and **committed + pushed** (`339aa63`). Still **not applied** — no billable AWS
+resources exist yet. **ADR-0019 (secret management)** ratified: 1Password = source of truth, SSM
+`SecureString` = Lambda runtime store; infra docs moved to the `op`-based, no-secrets-on-disk workflow.
 
 ## What exists
 
@@ -54,21 +55,23 @@ New: **ADR-0019 (secret management)** drafted as Proposed.
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE (`--continue` — mid-session, NOT a clean boundary):** the Wk 1
-> Terraform skeleton is written in **`infra/`** and passes `fmt`+`validate`, but **Stephen has not yet
-> reviewed it, it is uncommitted, and nothing is applied.** Resume by: (1) **review the `infra/` diff**
-> — RDS (`rds.tf`), single medallion lake bucket (`s3.tf`, bronze/silver/gold *prefixes* per ADR-0003),
-> default-VPC IP-locked SG (`network.tf`), GitHub OIDC deploy role (`iam_oidc.tf`), seed schema
-> (`sql/0001_init.sql`); (2) **commit** (`git add infra/`, message drafted in last session); (3) to
-> stand it up: `cp terraform.tfvars.example terraform.tfvars`, set `allowed_cidrs` to current IP
-> (`curl -s https://checkip.amazonaws.com`), `export TF_VAR_db_password=…`, then `terraform plan` →
-> `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
-> Open question to confirm at review: AWS provider pinned `~> 5.0` and `pg_version = "16"` (major-only).
-> NB: `terraform` **v1.15.6 installed** ✅; `gh` still not installed (SSH used for git, optional).
-> Deliberate Wk-1 deviations from ADRs, both documented in `infra/README.md` + `backend.tf`: **local
-> state** (not S3 per ADR-0009 → reconcile Wk 5) and **no Lambda reserved-concurrency** yet (no Lambdas
-> exist in Wk 1; the ADR-0002 amendment caps land with the API/dlt). Stephen runs all git/repo + apply
-> actions himself (give commands, don't execute) — see memory.
+> ⏭️ **NEXT SESSION STARTS HERE (clean boundary — start fresh):** the Wk 1 Terraform skeleton is
+> reviewed, committed, and pushed (`339aa63`); decision log is fully Accepted (0001–0019). The next
+> move is to **stand the infra up**. Resume by: (0) **housekeeping** — store the RDS master password in
+> 1Password at `op://pitch-control/rds-master/password` (the path the infra docs now reference);
+> (1) **pre-flight** `aws iam list-open-id-connect-providers` — AWS allows only **one** GitHub OIDC
+> provider per account, so if one already exists, `apply` collides (switch to a `data` source + import);
+> (2) **set inputs from 1Password** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`
+> and `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`); (3) `terraform init` →
+> `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
+> Confirmed at review (no longer open): AWS provider `~> 5.0` and `pg_version = "16"` (major-only) — both
+> deliberate. NB: `terraform` **v1.15.6 installed** ✅; `op` (1Password CLI) needed for step 2; `gh` still
+> not installed (SSH used for git, optional). Deliberate Wk-1 deviations, documented in `infra/README.md`
+> + `backend.tf`: **local state** (not S3 per ADR-0009 → reconcile Wk 5) and **no Lambda
+> reserved-concurrency** yet (no Lambdas in Wk 1; ADR-0002 amendment caps land with the API/dlt).
+> Carry-forward to Wk 2: tighten the OIDC trust `sub` from `repo:…:*` to `…:ref:refs/heads/main`; create
+> the SSM `SecureString` param + grant the Lambda role `ssm:GetParameter`+`kms:Decrypt` + the 1Password→SSM
+> seed step (ADR-0019). Stephen runs all git/repo + apply actions himself (give commands, don't execute).
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.
@@ -113,7 +116,7 @@ Skills being practiced deliberately, not just the app output:
 ## Multi-week roadmap
 
 - [~] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema; PostHog SDK wired.
-  - *In progress:* `infra/` scaffolded + `validate`-clean (2026-06-30); pending review → commit → apply. PostHog SDK is app-layer, still TODO.
+  - *In progress:* `infra/` scaffolded, reviewed, committed + pushed (`339aa63`, 2026-06-30); **pending `apply`**. PostHog SDK is app-layer, still TODO.
 - [ ] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
