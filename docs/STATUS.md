@@ -17,7 +17,9 @@ resources exist yet. **ADR-0019 (secret management)** ratified: 1Password = sour
 **Second pre-flight review 2026-07-02 (UNCOMMITTED — needs Stephen's commit):** added two apply-blocker
 checks to pre-flight (default-VPC existence; account-age → $0 is 12-month, not always-free) + config
 tweaks — RDS storage `gp3 → gp2` (documented free-tier type) and S3 lifecycle `depends_on` versioning.
-Changed files: `infra/rds.tf`, `infra/s3.tf`, `infra/README.md`, `docs/STATUS.md`.
+Committed `687699d`. Follow-up (also UNCOMMITTED): documented that **TLS is enforced by the pg16 default**
+(`rds.force_ssl=1`) and standardized clients on `sslmode=verify-full` + the RDS CA bundle — no infra
+change, docs only (`infra/README.md`, `infra/sql/0001_init.sql`, `docs/STATUS.md`).
 
 ## What exists
 
@@ -76,7 +78,12 @@ Changed files: `infra/rds.tf`, `infra/s3.tf`, `infra/README.md`, `docs/STATUS.md
 > `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
 > Confirmed at review (no longer open): AWS provider `~> 5.0` and `pg_version = "16"` (major-only) — both
 > deliberate; RDS storage switched **gp3 → gp2** (documented free-tier type); S3 lifecycle now
-> `depends_on` versioning. NB: `terraform` **v1.15.6 installed** ✅; `op` (1Password CLI) needed for step 2; `gh` still
+> `depends_on` versioning. **TLS: enforced by default — do NOT add a parameter group for it.** pg16's
+> default group ships `rds.force_ssl = 1`, so the instance rejects non-TLS connections out of the box;
+> connect with **`sslmode=verify-full`** + the RDS CA bundle
+> (`curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`) — encrypt *and* verify
+> the server cert (matters given public-RDS + IP-locked SG). psql/Postico setup in `infra/README.md` →
+> "Connecting (TLS)". NB: `terraform` **v1.15.6 installed** ✅; `op` (1Password CLI) needed for step 2; `gh` still
 > not installed (SSH used for git, optional). Deliberate Wk-1 deviations, documented in `infra/README.md`
 > + `backend.tf`: **local state** (not S3 per ADR-0009 → reconcile Wk 5) and **no Lambda
 > reserved-concurrency** yet (no Lambdas in Wk 1; ADR-0002 amendment caps land with the API/dlt).

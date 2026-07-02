@@ -31,6 +31,12 @@ reproducible from zero (ADR-0009).
   > **12-month** free tier (newer accounts: a ~6-month credit model), *not* always-free. On an AWS
   > account older than its free-tier window this apply bills ~**$12–13/mo** for the instance alone.
   > The config is $0 by construction; the *account* is the variable. Check age in pre-flight (below).
+- **TLS enforced by default — no config needed.** RDS PostgreSQL **15+** ships `rds.force_ssl = 1`
+  in the default parameter group, and we run `pg_version = "16"` on that default group, so the
+  instance **rejects non-TLS connections** out of the box. Do **not** add a custom parameter group
+  to "turn on" SSL — it's redundant. All clients connect with `sslmode=verify-full` (see
+  [Connecting (TLS)](#connecting-tls)) — encrypt *and* verify the server cert, which matters given
+  the public-RDS + IP-locked-SG posture.
 
 ## Pre-flight (run before `terraform apply` — cheap CLI checks, no resources created)
 
@@ -55,7 +61,11 @@ aws iam list-users --query 'Users[0].CreateDate' --output text 2>/dev/null || ec
 
 - Terraform ≥ 1.9 (v1.15.6 installed), AWS CLI authenticated to the target account.
 - 1Password CLI (`op`), signed in — secrets are read from the vault, not from disk (ADR-0019).
-- `psql` if you want to apply the seed schema.
+- `psql` (and/or Postico as a GUI) if you want to apply the seed schema / browse the DB.
+- The **Amazon RDS CA bundle**, for `sslmode=verify-full` (see [Connecting (TLS)](#connecting-tls)):
+  ```bash
+  curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem   # ~/.aws or wherever you like
+  ```
 
 ## Usage
 
@@ -74,10 +84,24 @@ terraform validate
 terraform plan
 terraform apply
 
-# 3. (optional) apply the seed schema to verify connectivity:
-psql "postgresql://pitchadmin:$TF_VAR_db_password@$(terraform output -raw rds_address):5432/pitchcontrol" \
+# 3. (optional) apply the seed schema to verify connectivity (TLS-verified — see Connecting below):
+psql "postgresql://pitchadmin:$TF_VAR_db_password@$(terraform output -raw rds_address):5432/pitchcontrol?sslmode=verify-full&sslrootcert=global-bundle.pem" \
      -f sql/0001_init.sql
 ```
+
+## Connecting (TLS)
+
+TLS is **enforced server-side** (pg16 default `rds.force_ssl = 1`), so every client must connect
+over SSL. We standardize on **`verify-full`** — encrypt *and* verify the server certificate against
+the [Amazon RDS CA bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) — not
+just `require` (which encrypts but skips the CA check). `verify-full` works because we connect via the
+AWS-provided endpoint (`terraform output -raw rds_address`), which matches the cert's hostname; a CNAME
+in front would break the hostname check.
+
+- **psql** — append to the connection URL:
+  `?sslmode=verify-full&sslrootcert=/path/to/global-bundle.pem`
+- **Postico** — connection → SSL Mode **`verify-full`**, and point the CA Certificate at
+  `global-bundle.pem`.
 
 ## Outputs
 

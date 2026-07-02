@@ -2,9 +2,11 @@
 --
 -- NB: this is NOT applied by Terraform. Terraform provisions the empty RDS instance;
 -- schema/migrations are applied by the app layer (ADR-0002 follow-up: "schema lives in
--- infra/ and app/ migrations"). For Wk 1 you can apply it by hand to verify connectivity:
+-- infra/ and app/ migrations"). For Wk 1 you can apply it by hand to verify connectivity.
+-- TLS is enforced (pg16 default rds.force_ssl=1); connect with sslmode=verify-full + the RDS CA
+-- bundle (see infra/README.md → Connecting (TLS)):
 --
---   psql "postgresql://pitchadmin:$TF_VAR_db_password@$(terraform output -raw rds_address):5432/pitchcontrol" \
+--   psql "postgresql://pitchadmin:$TF_VAR_db_password@$(terraform output -raw rds_address):5432/pitchcontrol?sslmode=verify-full&sslrootcert=global-bundle.pem" \
 --        -f sql/0001_init.sql
 --
 -- It is intentionally minimal: enough to prove the instance is reachable and to stand up
