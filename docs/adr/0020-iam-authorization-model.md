@@ -1,6 +1,6 @@
 # ADR-0020: IAM authorization model — one role per compute identity, least privilege
 
-- **Status:** Proposed
+- **Status:** ✅ Accepted (ratified 2026-07-03)
 - **Date:** 2026-07-03
 - **Deciders:** Stephen Delaney
 - **Tags:** infra, security, iam, auth

@@ -16,6 +16,7 @@ is run with production engineering rigor.
 | Service Level Objectives | [`slo/`](slo/) | What "reliable" means here: SLIs, SLOs, error budget |
 | Runbooks | [`runbooks/`](runbooks/) | How to detect, diagnose, and fix known failure modes |
 | Retros | [`retros/`](retros/) | Blameless postmortems; the learning loop back into ADRs/runbooks |
+| Backlog | [`backlog.md`](backlog.md) | Reviewed improvement queue: decisions for Stephen + tasks delegable to a model |
 
 ## The DevOps quartet this project practices
 

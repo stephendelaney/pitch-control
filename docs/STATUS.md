@@ -1,12 +1,12 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-02**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-03**.
 
 ## Current phase
 
 **Wk 1 in progress — Terraform skeleton reviewed + committed + pushed; NOT yet applied.** Phase 0
-docs complete + decision log ratified (0001–**0019**, all ✅ Accepted). Repo live:
+docs complete + decision log ratified (0001–**0020**, all ✅ Accepted). Repo live:
 **[github.com/stephendelaney/pitch-control](https://github.com/stephendelaney/pitch-control)**
 (public, `main`). Project named **`pitch-control`** (local folder stays `just-for-fun`; remote name
 differs deliberately). Infra in **`infra/`** is `fmt`+`validate` clean, **reviewed 2026-06-30** (dead
@@ -14,12 +14,22 @@ differs deliberately). Infra in **`infra/`** is `fmt`+`validate` clean, **review
 TEST-NET placeholder), and **committed + pushed** (`339aa63`). Still **not applied** — no billable AWS
 resources exist yet. **ADR-0019 (secret management)** ratified: 1Password = source of truth, SSM
 `SecureString` = Lambda runtime store; infra docs moved to the `op`-based, no-secrets-on-disk workflow.
-**Second pre-flight review 2026-07-02 (UNCOMMITTED — needs Stephen's commit):** added two apply-blocker
+**Second pre-flight review 2026-07-02 (committed `687699d`):** added two apply-blocker
 checks to pre-flight (default-VPC existence; account-age → $0 is 12-month, not always-free) + config
 tweaks — RDS storage `gp3 → gp2` (documented free-tier type) and S3 lifecycle `depends_on` versioning.
-Committed `687699d`. Follow-up (also UNCOMMITTED): documented that **TLS is enforced by the pg16 default**
+Follow-up (committed `1d059b3`): documented that **TLS is enforced by the pg16 default**
 (`rds.force_ssl=1`) and standardized clients on `sslmode=verify-full` + the RDS CA bundle — no infra
 change, docs only (`infra/README.md`, `infra/sql/0001_init.sql`, `docs/STATUS.md`).
+**ADR-0020 (IAM authorization model)** drafted, merged via PR #1 (`acbc358`) and **ratified ✅
+2026-07-03**: one role per compute identity across three trust boundaries (`tf-plan` read-only/any-ref
++ `tf-apply` write/`main`-pinned in CI; one shared runtime exec role, split-on-divergence; Cognito for
+clients). Terraform role-split lands with the Wk-2 deploy workflow (alongside the existing OIDC `sub`
+tightening carry-forward).
+**Solution review 2026-07-03** (fresh-eyes, full skeleton + docs): output captured in
+[`backlog.md`](backlog.md) — **two decisions for Stephen** (A1: the Wk-2 dlt→RDS network path is
+currently unresolved — OIDC grants IAM creds, not network reach; A2: verify whether the AWS account
+is legacy 12-month free tier or the post-July-2025 credits plan **before `apply`**) plus eight
+delegable hardening/doc tasks (B1–B8; B3 supersedes "role-split lands Wk 2" above — it can land now).
 
 ## What exists
 
@@ -58,6 +68,7 @@ change, docs only (`infra/README.md`, `infra/sql/0001_init.sql`, `docs/STATUS.md
 | 0001–0018 | ✅ Accepted — **full decision log ratified** |
 | 0002, 0007 amendments (2026-06-29) | ✅ Accepted — ratified 2026-06-30 (Lambda→RDS conn mgmt; Fargate per-step overflow) |
 | **0019** (secret management) | ✅ Accepted — ratified 2026-06-30. 1Password = source of truth; SSM `SecureString` = Lambda runtime store; OIDC unchanged; Secrets Manager = paid escalation. |
+| **0020** (IAM authorization model) | ✅ Accepted — ratified 2026-07-03 (merged via PR #1). One role per compute identity; `tf-plan`/`tf-apply` CI split (Wk-2 Terraform follow-up); shared runtime exec role, split-on-divergence. |
 
 ## Immediate next actions
 
@@ -72,7 +83,9 @@ change, docs only (`infra/README.md`, `infra/sql/0001_init.sql`, `docs/STATUS.md
 > account, so if one already exists, `apply` collides (switch to a `data` source + import);
 > (c) **account age** — RDS/S3 free tier is **12-month, not always-free**; on an account past its
 > window this apply bills **~$12–13/mo** for the instance alone (the config is $0 by construction, the
-> *account* is the variable);
+> *account* is the variable). ⚠️ *Refined by [`backlog.md`](backlog.md) A2: accounts created after
+> ~2025-07-15 are on the credits-based plan, not the 12-month tier — confirm the account's regime in
+> the Billing console, don't rely on age alone;*
 > (2) **set inputs from 1Password** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`
 > and `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`); (3) `terraform init` →
 > `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
