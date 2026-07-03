@@ -47,7 +47,7 @@ before credits lapse. Tracks as a Wk-5+ roadmap item.
 
 ## B. Delegable now (no decision required)
 
-### B1. Repo `CLAUDE.md` — highest leverage for delegation
+### B1. Repo `CLAUDE.md` — highest leverage for delegation — ✅ DONE 2026-07-03 (`62e2c4f`)
 
 The operating conventions (session ritual, ADR Proposed→ratify flow, git/apply actions are
 Stephen-run, $0 constraint, `sslmode=verify-full`, STATUS.md as source of truth) live in
@@ -55,6 +55,10 @@ Stephen-run, $0 constraint, `sslmode=verify-full`, STATUS.md as source of truth)
 model/session starts with the house rules. **Source material:** `docs/STATUS.md` (session
 ritual §), `docs/adr/README.md`, `infra/README.md`. **Done when:** a new session can operate
 correctly from `CLAUDE.md` alone without re-deriving conventions.
+
+**Outcome:** `CLAUDE.md` at repo root — scoped to the *public, repo-relevant* subset of the house
+rules (personal context stays in private memory by design). Cost posture restated as credits-plan
+(post-A2), not $0-structural. Separate durability step: back up the private memory dir (not repo).
 
 ### B2. AWS Budgets alarm (Terraform)
 

@@ -33,6 +33,10 @@ allowance, so RDS draws down credits at ~$12–14/mo — **$0 out of pocket for 
 money**; `infra/README.md` cost/pre-flight blocks updated; new non-blocking follow-up = plan the
 month-6 exit to an actually-free Postgres) plus eight delegable hardening/doc tasks (B1–B8; B3
 supersedes "role-split lands Wk 2" above — it can land now).
+**B1 ✅ DONE 2026-07-03 (`62e2c4f`):** repo-root `CLAUDE.md` — public/repo-scoped house rules
+(session ritual, ADR flow, maintainer-runs-git/apply, credits-plan cost posture, secrets-off-disk,
+RDS `verify-full`, IAM role split); personal context stays in private memory. Follow-up (not repo):
+back up the private memory dir for durability.
 
 ## What exists
 
