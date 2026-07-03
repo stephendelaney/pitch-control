@@ -27,10 +27,15 @@ reproducible from zero (ADR-0009).
   type); SSE-S3 (no KMS cost); no Performance Insights; no RDS Proxy / Secrets Manager (ADR-0002
   names RDS Proxy as a non-free escalation; ADR-0019 names Secrets Manager as the paid secret-store
   escalation). 1Password is already paid → $0 marginal.
-  > ⚠️ **"$0" is account-age-dependent, not structural.** The RDS instance, its storage, and S3 are
-  > **12-month** free tier (newer accounts: a ~6-month credit model), *not* always-free. On an AWS
-  > account older than its free-tier window this apply bills ~**$12–13/mo** for the instance alone.
-  > The config is $0 by construction; the *account* is the variable. Check age in pre-flight (below).
+  > ⚠️ **"$0" is credit-funded here, not structural.** This account is on the **post-July-2025
+  > credits plan** (confirmed 2026-07-03), *not* the legacy 12-month free tier — so there is **no
+  > 750-hour RDS allowance**. `db.t4g.micro` + 20 GB gp2 draws down credits at ~**$12–14/mo**
+  > (~$75–85 over the plan's 6 months, comfortably inside the $100–$200 of credits). **Net: $0 out
+  > of pocket for ~6 months, then real money** when the plan expires (6 months **or** credits
+  > exhausted, whichever first). The config is minimal by construction; the *funding* is the
+  > variable. Two upsides: standing up RDS + Budgets is how you *earn* the second $100 of credits,
+  > and B2's Budgets alarm (below) guards the drawdown. Plan the month-6 exit (tear down / migrate
+  > to an actually-free Postgres) before credits lapse.
 - **TLS enforced by default — no config needed.** RDS PostgreSQL **15+** ships `rds.force_ssl = 1`
   in the default parameter group, and we run `pg_version = "16"` on that default group, so the
   instance **rejects non-TLS connections** out of the box. Do **not** add a custom parameter group
@@ -40,7 +45,9 @@ reproducible from zero (ADR-0009).
 
 ## Pre-flight (run before `terraform apply` — cheap CLI checks, no resources created)
 
-Two of these guard against a **hard apply failure**; the third guards the **$0 assumption**.
+Both of these guard against a **hard apply failure**. (The free-tier-regime question is **resolved**:
+this account is on the post-July-2025 **credits plan** — see the $0 caveat above — so there is no
+account-age check to run; the spend is credit-funded, not free-tier-covered.)
 
 ```bash
 # 1. Default VPC must exist — network.tf depends on it. Empty output = hard failure at plan time.
@@ -53,8 +60,9 @@ aws iam list-open-id-connect-providers
 #   iam_oidc.tf for a `data "aws_iam_openid_connect_provider"` and reference its ARN (avoids
 #   EntityAlreadyExists).
 
-# 3. Account age → is this still inside the 12-month free-tier window? (See $0 caveat above.)
-aws iam list-users --query 'Users[0].CreateDate' --output text 2>/dev/null || echo "no IAM users — check the account's signup date in Billing console"
+# (Free-tier regime — RESOLVED 2026-07-03: this account is on the post-July-2025 credits plan,
+#  not the legacy 12-month tier. No age check needed; spend is credit-funded. See $0 caveat above.
+#  Optional: eyeball remaining credits + plan expiry in Billing console → Free tier / Credits.)
 ```
 
 ## Prerequisites

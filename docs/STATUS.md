@@ -27,9 +27,12 @@ clients). Terraform role-split lands with the Wk-2 deploy workflow (alongside th
 tightening carry-forward).
 **Solution review 2026-07-03** (fresh-eyes, full skeleton + docs): output captured in
 [`backlog.md`](backlog.md) — **two decisions for Stephen** (A1: the Wk-2 dlt→RDS network path is
-currently unresolved — OIDC grants IAM creds, not network reach; A2: verify whether the AWS account
-is legacy 12-month free tier or the post-July-2025 credits plan **before `apply`**) plus eight
-delegable hardening/doc tasks (B1–B8; B3 supersedes "role-split lands Wk 2" above — it can land now).
+currently unresolved — OIDC grants IAM creds, not network reach; **A2: ✅ RESOLVED 2026-07-03** —
+account is on the **post-July-2025 credits plan**, not the legacy 12-month tier: no 750-hr RDS
+allowance, so RDS draws down credits at ~$12–14/mo — **$0 out of pocket for ~6 months, then real
+money**; `infra/README.md` cost/pre-flight blocks updated; new non-blocking follow-up = plan the
+month-6 exit to an actually-free Postgres) plus eight delegable hardening/doc tasks (B1–B8; B3
+supersedes "role-split lands Wk 2" above — it can land now).
 
 ## What exists
 
@@ -81,11 +84,11 @@ delegable hardening/doc tasks (B1–B8; B3 supersedes "role-split lands Wk 2" ab
 > VPC**; empty output = hard failure at plan time (`aws ec2 create-default-vpc` to fix);
 > (b) `aws iam list-open-id-connect-providers` — AWS allows only **one** GitHub OIDC provider per
 > account, so if one already exists, `apply` collides (switch to a `data` source + import);
-> (c) **account age** — RDS/S3 free tier is **12-month, not always-free**; on an account past its
-> window this apply bills **~$12–13/mo** for the instance alone (the config is $0 by construction, the
-> *account* is the variable). ⚠️ *Refined by [`backlog.md`](backlog.md) A2: accounts created after
-> ~2025-07-15 are on the credits-based plan, not the 12-month tier — confirm the account's regime in
-> the Billing console, don't rely on age alone;*
+> (c) ~~account age~~ **RESOLVED (A2, 2026-07-03)** — account is on the **post-July-2025 credits
+> plan** (not the 12-month tier), so there is **no 750-hr RDS allowance**: this apply draws down
+> credits at ~**$12–14/mo** (~$75–85 over the plan's 6 months, inside the $100–$200 of credits).
+> **$0 out of pocket for ~6 months, then real money.** No age check to run; optionally eyeball
+> remaining credits + expiry in Billing console. Follow-up (non-blocking): plan the month-6 exit;
 > (2) **set inputs from 1Password** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`
 > and `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`); (3) `terraform init` →
 > `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).

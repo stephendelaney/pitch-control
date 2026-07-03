@@ -28,17 +28,22 @@ amendment before that work starts.
 
 **Deliverable:** one-page options paper → Stephen decides → ADR amendment (Proposed → ratify).
 
-### A2. Free-tier regime — is the account legacy 12-month or new credits-plan?
+### A2. Free-tier regime — is the account legacy 12-month or new credits-plan? — ✅ RESOLVED 2026-07-03
 
 **The gap:** AWS replaced the legacy 12-month free tier in **July 2025**; accounts created
 after ~2025-07-15 get a credits-based plan (~$100–200 over 6 months) with **no 750-hour RDS
-allowance**. Pre-flight check (c) in `infra/README.md` tests *account age*, which is only the
-right test for legacy accounts. On the new plan, the RDS instance burns credits at ~$12–13/mo.
+allowance**. Pre-flight check (c) in `infra/README.md` tested *account age*, which is only the
+right test for legacy accounts.
 
-**Deliverable:** Stephen confirms the account's regime (Billing console → Free tier page)
-**before `terraform apply`**; then update the pre-flight block in `infra/README.md` to test
-the actual regime and restate the cost math for whichever applies. (Verify the July-2025
-change details against AWS docs while updating — don't trust the summary here blindly.)
+**Resolution:** Stephen confirmed the account is on the **post-July-2025 credits plan** (6-month
+free plan). Facts verified against AWS docs: $100 signup credit + up to $100 from activities
+(EC2/RDS/Lambda/Bedrock/Budgets); plan expires at **6 months or credit exhaustion, whichever
+first**; **no 750-hour RDS allowance**. Cost math: `db.t4g.micro` + 20 GB gp2 ≈ **$12–14/mo**
+(~$75–85 over 6 months, inside the credits). **Net: $0 out of pocket for ~6 months, then real
+money.** `infra/README.md` updated (age check removed; cost caveat + credits framing restated).
+**New follow-up (not blocking apply):** plan the **month-6 exit** — tear down, or migrate to an
+actually-free Postgres (e.g. Neon/Supabase free tier, or Aurora Serverless v2 min-capacity) —
+before credits lapse. Tracks as a Wk-5+ roadmap item.
 
 ## B. Delegable now (no decision required)
 
