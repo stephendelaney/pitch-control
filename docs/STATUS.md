@@ -37,7 +37,7 @@ supersedes "role-split lands Wk 2" above — it can land now).
 (session ritual, ADR flow, maintainer-runs-git/apply, credits-plan cost posture, secrets-off-disk,
 RDS `verify-full`, IAM role split); personal context stays in private memory. Follow-up (not repo):
 back up the private memory dir for durability.
-**Pre-apply hardening bundle ✅ DONE 2026-07-04 (committed `f105681`; push pending):** folded the
+**Pre-apply hardening bundle ✅ DONE 2026-07-04 (committed + pushed `f105681`):** folded the
 apply-time backlog items into the tree so the *first* `apply` already includes them.
 **B2** — `infra/budgets.tf`: $1/mo AWS Budgets COST alarm (ACTUAL + FORECASTED email); credits
 counted, so it fires when out-of-pocket spend begins → doubles as the month-6 credit-exhaustion
@@ -100,8 +100,8 @@ Lambda deferred to the ADR-0015 buildout, where the paid-SSM-endpoint question m
 ## Immediate next actions
 
 > ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** the Wk 1 skeleton (`339aa63`) and the
-> **2026-07-04 pre-apply bundle (`f105681`) are committed — push pending** (`git push origin main`;
-> Stephen runs it). Bundle = B2/B3/B4/B7/B8 implemented in Terraform, B9 newly queued
+> **2026-07-04 pre-apply bundle (`f105681`) are committed + pushed** to `main`. Bundle =
+> B2/B3/B4/B7/B8 implemented in Terraform, B9 newly queued
 > (second/gross-drawdown budget, not yet written), and A1 resolved as **ADR-0021 ✅ Accepted
 > (ratified 2026-07-04)**. Decision log: **0001–0021 ✅ Accepted**. The next move is to
 > **stand the infra up**. Resume by: (0) **housekeeping** — store the RDS master password in
