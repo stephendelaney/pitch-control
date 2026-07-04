@@ -10,7 +10,8 @@ reproducible from zero (ADR-0009).
 | RDS Postgres `db.t4g.micro` (OLTP system of record) | `rds.tf` | [0002](../docs/adr/0002-postgres-jsonb-system-of-record.md) |
 | S3 medallion lake — one bucket, `bronze/silver/gold` prefixes | `s3.tf` | [0003](../docs/adr/0003-s3-parquet-medallion-lake.md) |
 | Default-VPC networking + IP-locked Postgres SG | `network.tf` | 0002 |
-| GitHub Actions OIDC provider + keyless deploy role | `iam_oidc.tf` | [0007](../docs/adr/0007-github-actions-lambda-orchestration.md) / [0009](../docs/adr/0009-terraform-iac.md) |
+| GitHub Actions OIDC provider + split deploy roles (`tf-plan` read-only / `tf-apply` write) | `iam_oidc.tf` | [0007](../docs/adr/0007-github-actions-lambda-orchestration.md) / [0009](../docs/adr/0009-terraform-iac.md) / [0020](../docs/adr/0020-iam-authorization-model.md) |
+| AWS Budgets cost guard ($1 monthly, email alert) | `budgets.tf` | — |
 | Seed schema (`ops.pipeline_runs`, JSONB landing) | `sql/0001_init.sql` | 0002 / 0007 / 0012 |
 
 > **Secrets:** 1Password is the source of truth; secrets are injected at runtime via the `op` CLI and
@@ -80,9 +81,10 @@ aws iam list-open-id-connect-providers
 ```bash
 cd infra
 
-# 1. Provide the two no-default inputs from 1Password (no secrets on disk — ADR-0019):
+# 1. Provide the no-default inputs (db_password from 1Password — no secrets on disk, ADR-0019):
 export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
 export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'   # lock ingress to your IP
+export TF_VAR_budget_notification_email="you@example.com"   # B2 alerts; no default (kept off-repo)
 #   (non-secret overrides only — e.g. pg_version — may go in a gitignored terraform.tfvars)
 
 # 2. Standard flow:
@@ -92,9 +94,14 @@ terraform validate
 terraform plan
 terraform apply
 
-# 3. (optional) apply the seed schema to verify connectivity (TLS-verified — see Connecting below):
-psql "postgresql://pitchadmin:$TF_VAR_db_password@$(terraform output -raw rds_address):5432/pitchcontrol?sslmode=verify-full&sslrootcert=global-bundle.pem" \
+# 3. (optional) apply the seed schema to verify connectivity (TLS-verified — see Connecting below).
+#    Password goes via PGPASSWORD (a var reference — the literal never hits shell history), NOT
+#    in the URL, where special chars break parsing and the value leaks into the process list:
+PGPASSWORD="$TF_VAR_db_password" \
+psql "postgresql://pitchadmin@$(terraform output -raw rds_address):5432/pitchcontrol?sslmode=verify-full&sslrootcert=global-bundle.pem" \
      -f sql/0001_init.sql
+#    (Cleaner still for repeated use: put the credentials in ~/.pgpass, chmod 600, and drop
+#     both PGPASSWORD and the username from the command.)
 ```
 
 ## Connecting (TLS)
@@ -111,10 +118,27 @@ in front would break the hostname check.
 - **Postico** — connection → SSL Mode **`verify-full`**, and point the CA Certificate at
   `global-bundle.pem`.
 
+## My IP changed — I can't reach Postgres
+
+`allowed_cidrs` locks 5432 to a single CIDR (your IP), so an ISP lease rotation or a move to a
+new network locks you out. Re-point the SG at your current IP and re-apply:
+
+```bash
+cd infra
+export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")   # apply needs it
+export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
+terraform apply   # only the security-group ingress rule changes; no DB/bucket churn
+```
+
+(This is a security-group edit only — the RDS instance and lake are untouched. Note the runner
+IPs still aren't added here; the Wk-2 CI ingest path is A1, not a static SG hole.)
+
 ## Outputs
 
-`lake_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and `gha_deploy_role_arn` (set the last
-as the `AWS_DEPLOY_ROLE_ARN` repo variable for Actions in Wk 2+).
+`lake_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and the two OIDC role ARNs —
+`tf_plan_role_arn` and `tf_apply_role_arn` (ADR-0020 split). Set them as the `AWS_TF_PLAN_ROLE_ARN`
+and `AWS_TF_APPLY_ROLE_ARN` repo variables for Actions in Wk 2+: PR `plan` assumes tf-plan
+(read-only, any ref); `main` `apply` + the dlt lake write assume tf-apply (write, main-pinned).
 
 ## Not here yet (by design)
 

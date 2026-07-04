@@ -74,6 +74,41 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake" {
   }
 }
 
+# B4 — deny any S3 request over plain HTTP. Mirrors the verify-full posture on RDS: the lake
+# is reachable only over TLS. This is a Deny-only policy (grants nothing), so it does NOT count
+# as a "public" policy and coexists with block_public_policy = true; and because IAM access is
+# always evaluated alongside it, it has no effect on the legitimate IAM-role access paths — it
+# only blocks the (already-private) bucket from insecure transport.
+data "aws_iam_policy_document" "lake_bucket" {
+  statement {
+    sid    = "DenyInsecureTransport"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.lake.arn, "${aws_s3_bucket.lake.arn}/*"]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "lake" {
+  bucket = aws_s3_bucket.lake.id
+  policy = data.aws_iam_policy_document.lake_bucket.json
+
+  # Ensure the public-access block is in place first; a Deny policy is never "public", but
+  # making the ordering explicit avoids any eval-order surprise with block_public_policy.
+  depends_on = [aws_s3_bucket_public_access_block.lake]
+}
+
 # Zero-byte prefix markers so the medallion structure is visible in the console from day one.
 # dlt/dbt write the real keys underneath; these just document the layout.
 resource "aws_s3_object" "layer_markers" {

@@ -9,24 +9,23 @@
 
 ## A. Decisions needed (Stephen picks; draft the options paper first)
 
-### A1. Wk-2 ingest network path — how does the Postgres→S3 dlt job reach RDS?
+### A1. Wk-2 ingest network path — how does the Postgres→S3 dlt job reach RDS? — ✅ RESOLVED 2026-07-04
 
 **The gap:** `infra/variables.tf` says GitHub Actions reaches RDS "via the OIDC role + (later)
 VPC routing" — but OIDC grants **IAM credentials, not network reach**. RDS is public and
 IP-locked to Stephen's home CIDR; GitHub-hosted runner IPs are dynamic. As sketched, the Wk-2
-Postgres→S3 dlt job **cannot connect**. This blocks Wk 2 and deserves an ADR-0007/0010
-amendment before that work starts.
+Postgres→S3 dlt job **cannot connect**. This blocks Wk 2.
 
-**Options to paper out (each has a catch):**
-
-1. **Lambda inside the default VPC** — a VPC Lambda has no route to S3/internet without NAT
-   (paid). A free **S3 gateway endpoint** fixes S3; SSM `GetParameter` then needs a paid
-   interface endpoint or config delivered another way.
-2. **Workflow opens/closes the SG dynamically** (add runner IP → run → remove) — free and
-   bounded, but ugly and adds a cleanup failure mode.
-3. **Self-hosted runner** — conflicts with the automation story.
-
-**Deliverable:** one-page options paper → Stephen decides → ADR amendment (Proposed → ratify).
+**Resolution:** drafted as **[ADR-0021](adr/0021-ci-ingest-network-path.md)** and **ratified ✅
+2026-07-04**. Chosen: **option 2 — the workflow opens/closes the SG ingress itself** (authorize the
+runner's current /32 on 5432 → dlt runs on the GitHub-hosted runner → `if: always()` revoke, with a
+start-of-run sweep + scheduled janitor for orphans). SG grant/revoke is a narrow, RDS-SG-scoped
+policy on the **runtime ingest role** (ADR-0020, not `tf-apply`). $0, no new standing infra; TLS
+`verify-full` holds on every path. In-VPC Lambda (option 1, SG-to-SG) is the end-state — deferred to
+the ADR-0015 API buildout, where the paid-SSM-interface-endpoint cost gets decided once for both
+consumers. **Triggered follow-ups (not yet done):** runbook `runbooks/orphaned-sg-rule.md`; refresh
+the `allowed_cidrs` comment in `infra/variables.tf` + the A1 note in `infra/README.md`; the ingest
+role joins the shared runtime exec role (ADR-0020, split-on-divergence).
 
 ### A2. Free-tier regime — is the account legacy 12-month or new credits-plan? — ✅ RESOLVED 2026-07-03
 
@@ -60,14 +59,21 @@ correctly from `CLAUDE.md` alone without re-deriving conventions.
 rules (personal context stays in private memory by design). Cost posture restated as credits-plan
 (post-A2), not $0-structural. Separate durability step: back up the private memory dir (not repo).
 
-### B2. AWS Budgets alarm (Terraform)
+### B2. AWS Budgets alarm (Terraform) — ✅ DONE 2026-07-04
 
-Add `aws_budgets_budget` with a low threshold (e.g. $1) + email notification to
-`stephen.m.delaney@gmail.com`. First two budgets are free; this directly guards the $0 goal
+Add `aws_budgets_budget` with a low threshold (e.g. $1) + email notification to the maintainer's
+address. First two budgets are free; this directly guards the $0 goal
 regardless of how A2 resolves. **Done when:** `terraform plan` shows the budget; alert fires
 on forecast/actual > threshold.
 
-### B3. Implement ADR-0020's `tf-plan`/`tf-apply` role split
+**Outcome:** `infra/budgets.tf` — `${project}-monthly-cost`, $1/mo COST budget, ACTUAL +
+FORECASTED email notifications to `budget_notification_email` (new var, **no default** — set via
+`TF_VAR_budget_notification_email`, kept off-repo so no personal email is committed to the public
+repo). Default cost types (credits **included**) make it fire when *out-of-pocket* spend
+starts — so the $1 alarm doubles as the credit-exhaustion / month-6 exit tripwire (stays quiet
+while credits cover the ~$13/mo RDS drawdown). `fmt`+`validate` clean; not yet applied.
+
+### B3. Implement ADR-0020's `tf-plan`/`tf-apply` role split — ✅ DONE 2026-07-04
 
 Pure Terraform, no CI dependency — roles can exist before any workflow uses them. Split
 `aws_iam_role.gha_deploy` into: `tf-plan` (read-only, trust `repo:<owner>/<repo>:*`) and
@@ -77,11 +83,24 @@ IAM-write out of `tf-apply` per ADR-0020. **Done when:** `terraform plan` clean;
 role's `sub` condition is `StringEquals` on the main ref (review-checklist item from
 ADR-0020's Consequences).
 
-### B4. Lake bucket policy: deny non-TLS
+**Outcome:** `infra/iam_oidc.tf` — `gha_deploy` split into `${project}-tf-plan` (read-only,
+`StringLike sub repo:…:*`) and `${project}-tf-apply` (write, **`StringEquals` sub
+`repo:…:ref:refs/heads/main`**). lake-RW attached to `tf-apply` (main-pinned write identity),
+with a comment that it migrates to the dedicated runtime exec role when that lands (ADR-0019/0020
+Wk-2 follow-up) so dlt and `terraform apply` don't share a role long-term. No IAM-write on either.
+`outputs.tf`: `gha_deploy_role_arn` → `tf_plan_role_arn` + `tf_apply_role_arn`
+(repo vars `AWS_TF_PLAN_ROLE_ARN` / `AWS_TF_APPLY_ROLE_ARN`). `fmt`+`validate` clean.
+
+### B4. Lake bucket policy: deny non-TLS — ✅ DONE 2026-07-04
 
 Add an `aws_s3_bucket_policy` on the lake denying `s3:*` when `aws:SecureTransport = false`.
 Matches the verify-full posture on RDS. **Done when:** policy in plan; no effect on the
 IAM-role access paths.
+
+**Outcome:** `infra/s3.tf` — `aws_s3_bucket_policy.lake` with a Deny-only `DenyInsecureTransport`
+statement (`Bool aws:SecureTransport = false`) over the bucket + objects. Deny-only ⇒ not a
+"public" policy, so it coexists with `block_public_policy = true`; `depends_on` the public-access
+block for explicit ordering. `fmt`+`validate` clean; not yet applied.
 
 ### B5. CI: `terraform fmt -check` + `validate` on PRs
 
@@ -98,19 +117,40 @@ sketched in `infra/backend.tf`). Do it immediately after the first successful `a
 (Stephen runs the migrate: `terraform init -migrate-state`). **Done when:** state lives in
 S3; `backend.tf` comment updated; ADR-0009 deviation note in STATUS closed.
 
-### B7. Doc fix: psql example in `infra/sql/0001_init.sql`
+### B7. Doc fix: psql example in `infra/sql/0001_init.sql` — ✅ DONE 2026-07-04
 
 The example URI interpolates `$TF_VAR_db_password` into the URL — breaks on special
 characters and lands the password in shell history/process list. Switch the example to
 `PGPASSWORD` (or `~/.pgpass`) + URI without credentials. Mirror in `infra/README.md`
 → "Connecting (TLS)". **Done when:** no credential appears in any example URI.
 
-### B8. Doc fix: home-IP rotation runbook line
+**Outcome:** both the `sql/0001_init.sql` header and `infra/README.md` Usage step 3 now use
+`PGPASSWORD="$TF_VAR_db_password" psql "postgresql://pitchadmin@…"` (password out of the URL; a
+var reference, so the literal never hits history) + a `~/.pgpass` note. No credential in any URI.
+
+### B8. Doc fix: home-IP rotation runbook line — ✅ DONE 2026-07-04
 
 `allowed_cidrs` locks 5432 to the current IP; an ISP rotation locks Stephen out. Document
 the refresh one-liner in `infra/README.md` (re-export
 `TF_VAR_allowed_cidrs` from `checkip.amazonaws.com` → `terraform apply`). **Done when:**
 README has a "my IP changed" recovery snippet.
+
+**Outcome:** new `infra/README.md` section "My IP changed — I can't reach Postgres": re-export
+`TF_VAR_allowed_cidrs` from `checkip.amazonaws.com` + `TF_VAR_db_password` from `op`, then
+`terraform apply` (SG-ingress-only change). Notes runner IPs still stay out (that's A1).
+
+### B9. Second budget: gross-drawdown watch (credit burn-rate)
+
+The B2 alarm counts credits (`include_credit = true`), so it stays silent while credits absorb
+spend and only fires once out-of-pocket money starts — by design, but it gives **zero visibility
+into how fast credits are burning**. A runaway resource could drain the ~$100–200 in weeks and
+the first signal would be the $1 tripwire *after* the money is gone. The second free budget slot
+(first two budgets per account are free) can watch **gross** spend: add a second
+`aws_budgets_budget` in `infra/budgets.tf` with `cost_types { include_credit = false }` and a
+limit just above the expected burn (~$15/mo for RDS + noise), same ACTUAL + FORECASTED email
+notifications to `budget_notification_email`. Quiet in a normal month; fires when drawdown
+exceeds the plan — i.e. it catches cost anomalies *while credits still mask them*. **Done when:**
+`terraform plan` shows both budgets; the gross budget excludes credits; still $0 (≤2 budgets).
 
 ## C. Noted, not queued (fine as-is / known)
 

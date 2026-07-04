@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-03**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-04**.
 
 ## Current phase
 
@@ -37,6 +37,25 @@ supersedes "role-split lands Wk 2" above — it can land now).
 (session ritual, ADR flow, maintainer-runs-git/apply, credits-plan cost posture, secrets-off-disk,
 RDS `verify-full`, IAM role split); personal context stays in private memory. Follow-up (not repo):
 back up the private memory dir for durability.
+**Pre-apply hardening bundle ✅ DONE 2026-07-04 (uncommitted — Stephen to commit):** folded the
+apply-time backlog items into the tree so the *first* `apply` already includes them.
+**B2** — `infra/budgets.tf`: $1/mo AWS Budgets COST alarm (ACTUAL + FORECASTED email); credits
+counted, so it fires when out-of-pocket spend begins → doubles as the month-6 credit-exhaustion
+tripwire. **B3** — `infra/iam_oidc.tf`: ADR-0020 role split — `tf-plan` (read-only, any ref) +
+`tf-apply` (write, **`StringEquals` `…:ref:refs/heads/main`**, retiring the wildcard footgun);
+lake-RW on `tf-apply` for now (migrates to the runtime exec role in Wk 2); outputs →
+`tf_plan_role_arn` + `tf_apply_role_arn`. **B4** — `infra/s3.tf`: `DenyInsecureTransport` bucket
+policy (deny `s3:*` when `aws:SecureTransport=false`), matching the RDS verify-full posture.
+**B7/B8** — doc fixes: psql example uses `PGPASSWORD` + credential-free URI (`sql/0001_init.sql`,
+`README.md`); README has a "my IP changed" SG-refresh runbook. All `fmt`+`validate` clean; **not
+applied**. Backlog B2/B3/B4/B7/B8 marked done. Remaining delegable: **B5** (CI fmt/validate
+workflow), **B6** (remote state, post-apply) + **B9** (new 2026-07-04, from the bundle review:
+second free budget watching *gross* spend, `include_credit = false`, ~$15/mo limit — surfaces
+credit burn-rate anomalies while B2 stays silent until out-of-pocket spend starts).
+Decision **A1** (Wk-2 dlt→RDS network path) — **RESOLVED 2026-07-04 by
+[ADR-0021](adr/0021-ci-ingest-network-path.md) (✅ Accepted, ratified 2026-07-04)**:
+workflow-managed ephemeral SG ingress (runner /32, `always()` revoke + janitor) for Wk 2; in-VPC
+Lambda deferred to the ADR-0015 buildout, where the paid-SSM-endpoint question must be decided anyway.
 
 ## What exists
 
@@ -76,12 +95,16 @@ back up the private memory dir for durability.
 | 0002, 0007 amendments (2026-06-29) | ✅ Accepted — ratified 2026-06-30 (Lambda→RDS conn mgmt; Fargate per-step overflow) |
 | **0019** (secret management) | ✅ Accepted — ratified 2026-06-30. 1Password = source of truth; SSM `SecureString` = Lambda runtime store; OIDC unchanged; Secrets Manager = paid escalation. |
 | **0020** (IAM authorization model) | ✅ Accepted — ratified 2026-07-03 (merged via PR #1). One role per compute identity; `tf-plan`/`tf-apply` CI split (Wk-2 Terraform follow-up); shared runtime exec role, split-on-divergence. |
+| **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE (clean boundary — start fresh):** the Wk 1 Terraform skeleton is
-> reviewed, committed, and pushed (`339aa63`); decision log is fully Accepted (0001–0019). The next
-> move is to **stand the infra up**. Resume by: (0) **housekeeping** — store the RDS master password in
+> ⏭️ **NEXT SESSION STARTS HERE (clean boundary — one maintainer action pending):** the Wk 1
+> skeleton is pushed (`339aa63`) and the **2026-07-04 pre-apply bundle sits uncommitted on top** —
+> B2/B3/B4/B7/B8 implemented in Terraform, B9 newly queued (second/gross-drawdown budget, not yet
+> written), and A1 resolved as **ADR-0021 ✅ Accepted (ratified 2026-07-04)**. **Stephen commits the
+> bundle** (nothing left to ratify). Decision log: **0001–0021 ✅ Accepted**. The next move is to
+> **stand the infra up**. Resume by: (0) **housekeeping** — store the RDS master password in
 > 1Password at `op://pitch-control/rds-master/password` (the path the infra docs now reference);
 > (1) **pre-flight — three cheap CLI checks (full block in `infra/README.md`):**
 > (a) `aws ec2 describe-vpcs --filters Name=isDefault,Values=true` — `network.tf` **requires a default
@@ -93,8 +116,9 @@ back up the private memory dir for durability.
 > credits at ~**$12–14/mo** (~$75–85 over the plan's 6 months, inside the $100–$200 of credits).
 > **$0 out of pocket for ~6 months, then real money.** No age check to run; optionally eyeball
 > remaining credits + expiry in Billing console. Follow-up (non-blocking): plan the month-6 exit;
-> (2) **set inputs from 1Password** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`
-> and `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`); (3) `terraform init` →
+> (2) **set inputs** — `export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")`,
+> `allowed_cidrs` to current IP (`curl -s https://checkip.amazonaws.com`), and the now-required
+> `TF_VAR_budget_notification_email` (no default — kept off-repo; B2); (3) `terraform init` →
 > `plan` → `apply` (**creates real billable free-tier AWS resources** — Stephen runs this himself).
 > Confirmed at review (no longer open): AWS provider `~> 5.0` and `pg_version = "16"` (major-only) — both
 > deliberate; RDS storage switched **gp3 → gp2** (documented free-tier type); S3 lifecycle now
@@ -107,9 +131,13 @@ back up the private memory dir for durability.
 > not installed (SSH used for git, optional). Deliberate Wk-1 deviations, documented in `infra/README.md`
 > + `backend.tf`: **local state** (not S3 per ADR-0009 → reconcile Wk 5) and **no Lambda
 > reserved-concurrency** yet (no Lambdas in Wk 1; ADR-0002 amendment caps land with the API/dlt).
-> Carry-forward to Wk 2: tighten the OIDC trust `sub` from `repo:…:*` to `…:ref:refs/heads/main`; create
-> the SSM `SecureString` param + grant the Lambda role `ssm:GetParameter`+`kms:Decrypt` + the 1Password→SSM
-> seed step (ADR-0019). Stephen runs all git/repo + apply actions himself (give commands, don't execute).
+> NB: the plan now also stands up the **2026-07-04 pre-apply bundle** (B2 Budgets alarm, B3 `tf-plan`/
+> `tf-apply` split, B4 lake TLS-deny policy) — expect those extra resources on first `plan`.
+> Carry-forward to Wk 2: the OIDC `sub` tightening is **now done** for `tf-apply` (B3, `StringEquals` on
+> `main`) — remaining is to create the SSM `SecureString` param + grant the Lambda role
+> `ssm:GetParameter`+`kms:Decrypt` + the 1Password→SSM seed step (ADR-0019), and migrate the lake-RW grant
+> off `tf-apply` onto the dedicated runtime exec role. Stephen runs all git/repo + apply actions himself
+> (give commands, don't execute).
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.

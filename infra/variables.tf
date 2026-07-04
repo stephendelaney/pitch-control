@@ -53,6 +53,16 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "budget_notification_email" {
+  description = <<-EOT
+    Email that receives AWS Budgets alerts (B2 cost guard). NO default — kept off-repo to avoid
+    advertising a personal address in a public repo. Set it at runtime:
+      export TF_VAR_budget_notification_email="you@example.com"
+    (or a gitignored terraform.tfvars). First two budgets per account are free.
+  EOT
+  type        = string
+}
+
 variable "allowed_cidrs" {
   description = <<-EOT
     CIDRs allowed to reach Postgres on 5432. NO default — lock to your current IP, e.g.

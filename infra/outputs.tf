@@ -23,7 +23,12 @@ output "rds_database" {
   value       = aws_db_instance.postgres.db_name
 }
 
-output "gha_deploy_role_arn" {
-  description = "IAM role ARN for GitHub Actions to assume via OIDC (set as a repo secret/var: AWS_DEPLOY_ROLE_ARN)."
-  value       = aws_iam_role.gha_deploy.arn
+output "tf_plan_role_arn" {
+  description = "Read-only OIDC role for `terraform plan` on PRs (repo var: AWS_TF_PLAN_ROLE_ARN). ADR-0020."
+  value       = aws_iam_role.tf_plan.arn
+}
+
+output "tf_apply_role_arn" {
+  description = "Write OIDC role (main-pinned) for `terraform apply` + Wk-2 lake write (repo var: AWS_TF_APPLY_ROLE_ARN). ADR-0020."
+  value       = aws_iam_role.tf_apply.arn
 }

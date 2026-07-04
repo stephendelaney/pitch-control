@@ -12,6 +12,10 @@ allowed_cidrs = ["203.0.113.4/32"]
 
 # db_password: NO on-disk value. Set TF_VAR_db_password from 1Password (see header).
 
+# REQUIRED, non-secret, NO default (kept off-repo so no personal email is committed). Prefer the
+# env var: export TF_VAR_budget_notification_email="you@example.com"  — or set it here:
+# budget_notification_email = "you@example.com"   # B2 cost-guard alerts
+
 # Optional NON-secret overrides (defaults shown):
 # aws_region  = "us-east-1"
 # db_name     = "pitchcontrol"

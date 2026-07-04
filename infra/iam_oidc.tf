@@ -12,9 +12,22 @@ resource "aws_iam_openid_connect_provider" "github" {
   ]
 }
 
-# Trust policy: only this repo's workflows may assume the role. The sub claim is pinned to
-# the repo (any branch/PR for now); tighten to specific refs/environments when CI matures.
-data "aws_iam_policy_document" "gha_trust" {
+# ADR-0020: one role per compute identity, scoped to its trust boundary. The single CI
+# deploy role is split by *privilege level* into two OIDC-assumed roles:
+#
+#   tf-plan  — READ-ONLY, trust = any branch/PR (repo:<owner>/<repo>:*). Used by
+#              `terraform plan` on PRs. Read-only so untrusted PR code (forks, a compromised
+#              action) cannot mutate anything.
+#   tf-apply — WRITE, trust = pinned to refs/heads/main (StringEquals, not a StringLike
+#              wildcard — ADR-0020's named footgun). Used by `terraform apply` on main; the
+#              account's real mutation authority.
+#
+# IAM-write stays OUT of tf-apply (ADR-0020): CI can never grant itself IAM; the OIDC
+# provider + these roles are bootstrapped out-of-band. The broader Terraform-deploy policy
+# CI needs to run `apply` lands in Wk 5.
+
+# --- tf-plan: read-only, any ref ---
+data "aws_iam_policy_document" "tf_plan_trust" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -30,6 +43,7 @@ data "aws_iam_policy_document" "gha_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # Any branch or PR of this repo — safe because the role is read-only.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
@@ -38,17 +52,52 @@ data "aws_iam_policy_document" "gha_trust" {
   }
 }
 
-resource "aws_iam_role" "gha_deploy" {
-  name               = "${var.project}-gha-deploy"
-  description        = "Assumed by GitHub Actions via OIDC. Keyless. (ADR-0007/0009)"
-  assume_role_policy = data.aws_iam_policy_document.gha_trust.json
+resource "aws_iam_role" "tf_plan" {
+  name               = "${var.project}-tf-plan"
+  description        = "GitHub Actions OIDC, READ-ONLY (any ref). `terraform plan` on PRs. (ADR-0020)"
+  assume_role_policy = data.aws_iam_policy_document.tf_plan_trust.json
 }
 
-# Starter permissions: read/write the medallion lake. This is the FIRST real use of the
-# role — the Wk 2 dlt jobs land Bronze in S3 from Actions. Terraform-deploy permissions
-# (the broader infra-management policy CI needs to run apply) are added in Wk 5 when CI
-# deploys land; kept out now to stay least-privilege.
-data "aws_iam_policy_document" "gha_lake_rw" {
+# --- tf-apply: write, pinned to main ---
+data "aws_iam_policy_document" "tf_apply_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    # Pinned to the default branch — StringEquals on the exact ref, NOT a StringLike
+    # wildcard. This is the mutation authority; a loose match here reopens the account
+    # (ADR-0020 review-checklist item).
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
+    }
+  }
+}
+
+resource "aws_iam_role" "tf_apply" {
+  name               = "${var.project}-tf-apply"
+  description        = "GitHub Actions OIDC, WRITE (main only). `terraform apply` + Wk-2 lake write. (ADR-0020)"
+  assume_role_policy = data.aws_iam_policy_document.tf_apply_trust.json
+}
+
+# Starter permissions: read/write the medallion lake — the FIRST real use of a CI role, the
+# Wk 2 dlt jobs landing Bronze in S3 from Actions (runs on main). Attached to tf-apply, the
+# main-pinned write identity. NOTE: when the dedicated shared runtime exec role lands
+# (ADR-0019/0020 Wk-2 follow-up), this data-plane write MIGRATES there so tf-apply holds only
+# infra-management authority — do not let dlt and `terraform apply` share a role long-term.
+data "aws_iam_policy_document" "lake_rw" {
   statement {
     sid       = "ListLakeBucket"
     effect    = "Allow"
@@ -64,8 +113,8 @@ data "aws_iam_policy_document" "gha_lake_rw" {
   }
 }
 
-resource "aws_iam_role_policy" "gha_lake_rw" {
+resource "aws_iam_role_policy" "lake_rw" {
   name   = "${var.project}-lake-rw"
-  role   = aws_iam_role.gha_deploy.id
-  policy = data.aws_iam_policy_document.gha_lake_rw.json
+  role   = aws_iam_role.tf_apply.id
+  policy = data.aws_iam_policy_document.lake_rw.json
 }
