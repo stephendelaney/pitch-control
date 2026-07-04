@@ -65,9 +65,10 @@ reveal. Motivation for the split idea was secret/PII leakage — but the 1Passwo
 backlog **B10**: layer 1 `.gitignore` (already strong) + **layer 2 `.pre-commit-config.yaml`**
 (`gitleaks` + `detect-private-key` + `check-added-large-files`) + layer 3 GitHub push protection & a CI
 `gitleaks` job (fold into **B5**) + **layer 4 `runbooks/secret-leak-response.md`** (rotate-first,
-then purge) + PII convention (synthetic fixtures only). Files landed this session (pre-commit config,
-runbook, ADR, CLAUDE.md house rule, index/backlog); **not yet committed**. Two manual Stephen-run
-toggles remain: `pre-commit install` and enable push protection (repo Settings → Code security).
+then purge) + PII convention (synthetic fixtures only). **Committed + pushed 2026-07-04 (`d9bff51`):**
+pre-commit config, leak-response runbook, ADR-0022 (✅ Accepted), CLAUDE.md house rule, index/backlog.
+Two manual Stephen-run toggles remain (before Wk 2): `pre-commit install` and enable secret
+scanning + push protection (repo Settings → Code security).
 
 ## What exists
 
