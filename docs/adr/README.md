@@ -28,6 +28,7 @@ Significant decisions are recorded here using [MADR-lite](template.md). ADRs are
 | [0019](0019-secret-management.md) | Secret management — 1Password (source of truth) + SSM runtime store | ✅ Accepted |
 | [0020](0020-iam-authorization-model.md) | IAM authorization model — one role per compute identity, least privilege | ✅ Accepted |
 | [0021](0021-ci-ingest-network-path.md) | Wk-2 ingest network path — workflow-managed ephemeral SG ingress (runner→RDS) | ✅ Accepted |
+| [0022](0022-public-repo-strategy.md) | Public-repo strategy — build in public + Pages showcase, gated by secret/PII leakage controls | ✅ Accepted |
 
 **Status legend:** ✅ Accepted · 📝 Proposed (decision leaning made, rationale not yet written) ·
 🔄 Superseded · ⚠️ Deprecated

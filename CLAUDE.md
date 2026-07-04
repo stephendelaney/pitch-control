@@ -44,6 +44,13 @@ we're at a **clean boundary** (start fresh next session) or **mid-decision** (`-
 - **Secrets never touch disk.** 1Password is the source of truth; inject at runtime via the `op`
   CLI; Lambdas read from SSM `SecureString` seeded from 1Password (ADR-0019). No secret values in
   committed files or example URIs.
+- **Public repo — build in public, harden against leaks** (ADR-0022). We stay public (the visible
+  rationale→implementation journey is the point); the polished "finished product" is a Wk-5+ Jekyll
+  **Pages showcase layered on top**, not a private-repo reveal. A public commit is **indexed the
+  instant it's pushed** — so prevention is enforced: `.pre-commit-config.yaml` (`gitleaks` +
+  friends), GitHub push protection, a CI scan (B5/B10), and **synthetic fixtures only** (never commit
+  real user/manager PII). If a leak happens: **rotate first, then purge history**
+  ([`runbooks/secret-leak-response.md`](docs/runbooks/secret-leak-response.md)).
 - **RDS TLS is enforced by default.** pg16's default parameter group ships `rds.force_ssl = 1` —
   the instance rejects non-TLS connections out of the box. **Do not add a parameter group to "turn
   on" SSL.** Clients connect with **`sslmode=verify-full`** + the RDS CA bundle.

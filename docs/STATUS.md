@@ -56,6 +56,18 @@ Decision **A1** (Wk-2 dlt→RDS network path) — **RESOLVED 2026-07-04 by
 [ADR-0021](adr/0021-ci-ingest-network-path.md) (✅ Accepted, ratified 2026-07-04)**:
 workflow-managed ephemeral SG ingress (runner /32, `always()` revoke + janitor) for Wk 2; in-VPC
 Lambda deferred to the ADR-0015 buildout, where the paid-SSM-endpoint question must be decided anyway.
+**Repo strategy decided 2026-07-04 — [ADR-0022](adr/0022-public-repo-strategy.md) (✅ Accepted,
+ratified 2026-07-04):** stay public + build in public (the visible rationale→implementation journey is the
+asset); the "finished product" is a **Wk-5+ Jekyll Pages showcase layered on top**, not a private-repo
+reveal. Motivation for the split idea was secret/PII leakage — but the 1Password vault isn't exposed
+(ADR-0019, `op` at runtime), so the real risk is an *accidental value/PII commit* to a public repo
+(= indexed the instant it's pushed). Answer is a **defense-in-depth gate before Wk 2**, tracked as new
+backlog **B10**: layer 1 `.gitignore` (already strong) + **layer 2 `.pre-commit-config.yaml`**
+(`gitleaks` + `detect-private-key` + `check-added-large-files`) + layer 3 GitHub push protection & a CI
+`gitleaks` job (fold into **B5**) + **layer 4 `runbooks/secret-leak-response.md`** (rotate-first,
+then purge) + PII convention (synthetic fixtures only). Files landed this session (pre-commit config,
+runbook, ADR, CLAUDE.md house rule, index/backlog); **not yet committed**. Two manual Stephen-run
+toggles remain: `pre-commit install` and enable push protection (repo Settings → Code security).
 
 ## What exists
 
@@ -96,6 +108,7 @@ Lambda deferred to the ADR-0015 buildout, where the paid-SSM-endpoint question m
 | **0019** (secret management) | ✅ Accepted — ratified 2026-06-30. 1Password = source of truth; SSM `SecureString` = Lambda runtime store; OIDC unchanged; Secrets Manager = paid escalation. |
 | **0020** (IAM authorization model) | ✅ Accepted — ratified 2026-07-03 (merged via PR #1). One role per compute identity; `tf-plan`/`tf-apply` CI split (Wk-2 Terraform follow-up); shared runtime exec role, split-on-divergence. |
 | **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
+| **0022** (public-repo strategy) | ✅ Accepted — ratified 2026-07-04. Stay public + build in public; Wk-5+ Jekyll Pages showcase layered on top (not a private-repo reveal); enabled by a secret/PII leakage gate before Wk 2 (B10). |
 
 ## Immediate next actions
 
@@ -138,6 +151,12 @@ Lambda deferred to the ADR-0015 buildout, where the paid-SSM-endpoint question m
 > `ssm:GetParameter`+`kms:Decrypt` + the 1Password→SSM seed step (ADR-0019), and migrate the lake-RW grant
 > off `tf-apply` onto the dedicated runtime exec role. Stephen runs all git/repo + apply actions himself
 > (give commands, don't execute).
+>
+> **Also pending (repo strategy, 2026-07-04):** **ADR-0022 ✅ ratified 2026-07-04.** Two Stephen-run
+> leakage-gate toggles from **B10** remain — `pipx install pre-commit && pre-commit install`
+> (activates the `.pre-commit-config.yaml` local gate) and enable **secret scanning + push protection**
+> in repo Settings → Code security & analysis. The gate must be live **before Wk 2** (first sensitive
+> commit). The Jekyll Pages showcase is a Wk-5+ item, not now.
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.

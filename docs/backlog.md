@@ -106,8 +106,9 @@ block for explicit ordering. `fmt`+`validate` clean; not yet applied.
 
 Add `.github/workflows/terraform-check.yml` — no AWS credentials needed (validate offline:
 `terraform init -backend=false`). Catches drift on every PR and stands up the workflows
-skeleton Wk 2 builds on. Optional stretch: tflint. **Done when:** workflow green on a
-trivial PR.
+skeleton Wk 2 builds on. Optional stretch: tflint. **Also fold in the CI `gitleaks` scan**
+(ADR-0022 layer 3 / B10) — a full-history secret scan job in the same workflow, no creds needed.
+**Done when:** workflow green on a trivial PR; gitleaks job present.
 
 ### B6. Pull remote Terraform state forward (from Wk 5 to right-after-first-apply)
 
@@ -151,6 +152,20 @@ limit just above the expected burn (~$15/mo for RDS + noise), same ACTUAL + FORE
 notifications to `budget_notification_email`. Quiet in a normal month; fires when drawdown
 exceeds the plan — i.e. it catches cost anomalies *while credits still mask them*. **Done when:**
 `terraform plan` shows both budgets; the gross budget excludes credits; still $0 (≤2 budgets).
+
+### B10. Secret/PII leakage gate — harden before Wk-2 sensitive commits (ADR-0022)
+
+Stay-public decision (ADR-0022) is **gated** on defense-in-depth against accidentally committing a
+secret value or PII to the public repo. `.gitignore` (layer 1) already covers env/secret/data
+artifacts. Land the rest: **layer 2 (local gate)** — `.pre-commit-config.yaml` with `gitleaks` +
+`detect-private-key` + `check-added-large-files` *(✅ committed with the ADR)*; **layer 3 (backstops)**
+— GitHub secret scanning + **push protection** (repo Settings; free on public) **and** a CI `gitleaks`
+job (fold into **B5**); **layer 4 (response)** — `docs/runbooks/secret-leak-response.md` (rotate-first,
+then purge) *(✅ committed with the ADR)*; **PII convention** — synthetic fixtures only, own FPL entry
+never committed. **Manual (Stephen):** `pre-commit install`; enable push protection. **Done when:** a
+test commit containing a fake secret is blocked locally *and* by push protection; CI gitleaks job green.
+Timing: **before Wk 2** (dlt real data + DB password in env). Files done this session; the two manual
+toggles + the CI job (via B5) remain.
 
 ## C. Noted, not queued (fine as-is / known)
 

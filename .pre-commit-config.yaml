@@ -1,0 +1,27 @@
+# Pre-commit secret/PII leakage gate (ADR-0022).
+# This is the *local* layer: it blocks a commit before a secret or accidental
+# data dump can enter the tree. It is defense-in-depth, not the only line —
+# GitHub push protection (server-side) + a CI gitleaks scan (backlog B5) back it up,
+# and a bypassed hook is exactly why those backstops exist.
+#
+# Setup (Stephen runs, once):  pipx install pre-commit  &&  pre-commit install
+# Run against all files ad hoc: pre-commit run --all-files
+# Emergency bypass (avoid):     git commit --no-verify   (push protection still guards)
+
+repos:
+  # Secret scanning — the primary gate.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Cheap, high-value hygiene from the pre-commit maintainers.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Blocks committing a private key even if it dodges .gitignore.
+      - id: detect-private-key
+      # Catches an accidental data/parquet/duckdb dump slipping the ignore list —
+      # also a blunt guard against a large secret blob committed by mistake.
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
