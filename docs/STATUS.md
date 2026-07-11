@@ -67,16 +67,19 @@ then purge) + PII convention (synthetic fixtures only). **Committed + pushed 202
 pre-commit config, leak-response runbook, ADR-0022 (✅ Accepted), CLAUDE.md house rule, index/backlog.
 Two manual Stephen-run toggles remain (before Wk 2): `pre-commit install` and enable secret
 scanning + push protection (repo Settings → Code security).
-**Delegable CI/cost bundle ✅ DONE 2026-07-11 (staged, not yet committed):** **B5** —
+**Delegable CI/cost bundle ✅ DONE 2026-07-11 (committed + pushed `dcf2a93`; first CI run green):** **B5** —
 `.github/workflows/terraform-check.yml`: two-job CI backstop, no AWS creds. Job 1 `terraform`
 (`fmt -check -recursive` + `init -backend=false` + `validate`, pinned TF `1.9.8`); job 2 `gitleaks`
 full-history scan (binary pinned **v8.21.2** = pre-commit parity, direct download not the
 marketplace action) — this is ADR-0022 layer-3's CI half (push-protection toggle still manual).
 Runs on PR→main + push→main, `permissions: contents: read`. **B9** — `infra/budgets.tf`: second
 budget `${project}-monthly-gross`, $15/mo, `include_credit = false` (gross-drawdown watch that fires
-while credits still mask spend from the B2 net budget); two budgets = still free. Verified locally:
-`fmt -check` + `validate` clean, gitleaks asset URL 200, workflow YAML parses. **Not yet committed
-or exercised on a live PR.** Remaining delegable: **B6** (remote state, post-apply only).
+while credits still mask spend from the B2 net budget); two budgets = still free. Pushed via GitHub
+Desktop (the CLI HTTPS token lacked the `workflow` scope needed to push `.github/workflows/`).
+**First CI run green** — both jobs pass (`gitleaks` 3s, `fmt+validate` 18s). Low-pri follow-up: CI
+logs warn `actions/checkout@v4` + `setup-terraform@v3` run on forced Node 24 (Node 20 deprecation) —
+bump action versions when convenient, non-blocking. Remaining delegable: **B6** (remote state,
+post-apply only).
 
 ## What exists
 
