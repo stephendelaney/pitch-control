@@ -4,9 +4,19 @@
 # GitHub push protection (server-side) + a CI gitleaks scan (backlog B5) back it up,
 # and a bypassed hook is exactly why those backstops exist.
 #
-# Setup (Stephen runs, once):  pipx install pre-commit  &&  pre-commit install
-# Run against all files ad hoc: pre-commit run --all-files
-# Emergency bypass (avoid):     git commit --no-verify   (push protection still guards)
+# This hook runs at COMMIT time (not push). It fires no matter what makes the commit —
+# but the hook has to be able to FIND the pre-commit binary, and macOS GUI apps
+# (e.g. GitHub Desktop) don't inherit your Terminal's PATH. So:
+#   - Install via Homebrew, which lands on the GUI PATH too:  brew install pre-commit
+#     (pipx's ~/.local/bin is usually NOT on the GitHub Desktop PATH → hook can't run.)
+#   - For guaranteed coverage, COMMIT FROM THE TERMINAL (`git commit`). Committing from
+#     GitHub Desktop works only if pre-commit is on its PATH (hence brew above).
+#   - Pushing from GitHub Desktop does NOT run this hook (it's commit-time) — that path
+#     is covered by GitHub push protection instead.
+#
+# Setup (Stephen runs, once):   brew install pre-commit  &&  pre-commit install
+# Run against all files ad hoc:  pre-commit run --all-files
+# Emergency bypass (avoid):      git commit --no-verify   (push protection still guards)
 
 repos:
   # Secret scanning — the primary gate.

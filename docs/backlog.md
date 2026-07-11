@@ -184,10 +184,11 @@ Timing: **before Wk 2** (dlt real data + DB password in env).
 **Status 2026-07-11:** layer 1 ✅, layer 4 ✅ (both committed with ADR-0022). Layer 3 **✅ complete** —
 GitHub **secret scanning + push protection both enabled** (verified via
 `gh api repos/…/… --jq .security_and_analysis`: both `enabled`) and the CI `gitleaks` job landed with
-**B5** (green on `dcf2a93`). Layer 2 (local): `.pre-commit-config.yaml` committed, but the hook is
-**not yet installed** (`pre-commit` binary not on PATH) — the one remaining item:
-`pipx install pre-commit && pre-commit install`. Not blocking: push protection (server) + CI gitleaks
-(history) already backstop every push; the local hook is the pre-commit convenience layer.
+**B5** (green on `dcf2a93`). Layer 2 (local): `.pre-commit-config.yaml` committed **and now installed ✅
+2026-07-11** — `brew install pre-commit` (4.6.0, brew not pipx so it's on the GitHub Desktop GUI
+PATH) + `pre-commit install`; `pre-commit run --all-files` green. Commit from the Terminal for
+guaranteed coverage (the hook is commit-time; a Desktop push doesn't run it — push protection covers
+that). **All four ADR-0022 layers now live — B10 complete.**
 
 ## C. Noted, not queued (fine as-is / known)
 
