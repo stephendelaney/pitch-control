@@ -67,8 +67,12 @@ variable "allowed_cidrs" {
   description = <<-EOT
     CIDRs allowed to reach Postgres on 5432. NO default — lock to your current IP, e.g.
       allowed_cidrs = ["203.0.113.4/32"]
-    GitHub Actions runner IPs are dynamic and NOT added here; the Wk 2 dlt-from-Postgres
-    read path reaches RDS via the OIDC role + (later) VPC routing, not a static SG hole.
+    GitHub Actions runner IPs are dynamic and NOT added here. OIDC grants IAM credentials,
+    not network reach, so the Wk-2 dlt-from-Postgres job can't ride the deploy role onto RDS.
+    Per ADR-0021 the ingest workflow instead opens its own SG ingress for the runner's current
+    /32 on 5432, runs, then revokes it (if: always() + a janitor for orphans) — a transient
+    hole, not a standing one. In-VPC Lambda (SG-to-SG, no public exposure) is the deferred
+    end-state, landing with the ADR-0015 API buildout.
   EOT
   type        = list(string)
 }

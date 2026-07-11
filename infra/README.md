@@ -131,7 +131,9 @@ terraform apply   # only the security-group ingress rule changes; no DB/bucket c
 ```
 
 (This is a security-group edit only — the RDS instance and lake are untouched. Note the runner
-IPs still aren't added here; the Wk-2 CI ingest path is A1, not a static SG hole.)
+IPs still aren't added here: per [ADR-0021](../docs/adr/0021-ci-ingest-network-path.md) the Wk-2 CI
+ingest job opens its own transient /32 ingress at run time and revokes it after — it doesn't rely on
+a standing SG hole.)
 
 ## Outputs
 
