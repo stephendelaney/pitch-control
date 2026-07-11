@@ -65,8 +65,11 @@ backlog **B10**: layer 1 `.gitignore` (already strong) + **layer 2 `.pre-commit-
 `gitleaks` job (fold into **B5**) + **layer 4 `runbooks/secret-leak-response.md`** (rotate-first,
 then purge) + PII convention (synthetic fixtures only). **Committed + pushed 2026-07-04 (`d9bff51`):**
 pre-commit config, leak-response runbook, ADR-0022 (✅ Accepted), CLAUDE.md house rule, index/backlog.
-Two manual Stephen-run toggles remain (before Wk 2): `pre-commit install` and enable secret
-scanning + push protection (repo Settings → Code security).
+**Leakage gate — server side ✅ 2026-07-11:** GitHub **secret scanning + push protection both
+enabled** (verified via `gh api …/security_and_analysis` — both `enabled`); with the CI `gitleaks`
+job (B5) that completes ADR-0022 layer 3. **One B10 item remains:** the *local* pre-commit hook is
+not yet installed (`pre-commit` binary not on PATH) → `pipx install pre-commit && pre-commit install`.
+Non-blocking — push protection + CI gitleaks already backstop every push.
 **Delegable CI/cost bundle ✅ DONE 2026-07-11 (committed + pushed `dcf2a93`; first CI run green):** **B5** —
 `.github/workflows/terraform-check.yml`: two-job CI backstop, no AWS creds. Job 1 `terraform`
 (`fmt -check -recursive` + `init -backend=false` + `validate`, pinned TF `1.9.8`); job 2 `gitleaks`
