@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-04**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-11**.
 
 ## Current phase
 
@@ -48,10 +48,8 @@ lake-RW on `tf-apply` for now (migrates to the runtime exec role in Wk 2); outpu
 policy (deny `s3:*` when `aws:SecureTransport=false`), matching the RDS verify-full posture.
 **B7/B8** — doc fixes: psql example uses `PGPASSWORD` + credential-free URI (`sql/0001_init.sql`,
 `README.md`); README has a "my IP changed" SG-refresh runbook. All `fmt`+`validate` clean; **not
-applied**. Backlog B2/B3/B4/B7/B8 marked done. Remaining delegable: **B5** (CI fmt/validate
-workflow), **B6** (remote state, post-apply) + **B9** (new 2026-07-04, from the bundle review:
-second free budget watching *gross* spend, `include_credit = false`, ~$15/mo limit — surfaces
-credit burn-rate anomalies while B2 stays silent until out-of-pocket spend starts).
+applied**. Backlog B2/B3/B4/B7/B8 marked done — **and now B5 + B9 (2026-07-11, see below)**.
+Remaining delegable: **B6** (remote state, post-apply only).
 Decision **A1** (Wk-2 dlt→RDS network path) — **RESOLVED 2026-07-04 by
 [ADR-0021](adr/0021-ci-ingest-network-path.md) (✅ Accepted, ratified 2026-07-04)**:
 workflow-managed ephemeral SG ingress (runner /32, `always()` revoke + janitor) for Wk 2; in-VPC
@@ -69,6 +67,16 @@ then purge) + PII convention (synthetic fixtures only). **Committed + pushed 202
 pre-commit config, leak-response runbook, ADR-0022 (✅ Accepted), CLAUDE.md house rule, index/backlog.
 Two manual Stephen-run toggles remain (before Wk 2): `pre-commit install` and enable secret
 scanning + push protection (repo Settings → Code security).
+**Delegable CI/cost bundle ✅ DONE 2026-07-11 (staged, not yet committed):** **B5** —
+`.github/workflows/terraform-check.yml`: two-job CI backstop, no AWS creds. Job 1 `terraform`
+(`fmt -check -recursive` + `init -backend=false` + `validate`, pinned TF `1.9.8`); job 2 `gitleaks`
+full-history scan (binary pinned **v8.21.2** = pre-commit parity, direct download not the
+marketplace action) — this is ADR-0022 layer-3's CI half (push-protection toggle still manual).
+Runs on PR→main + push→main, `permissions: contents: read`. **B9** — `infra/budgets.tf`: second
+budget `${project}-monthly-gross`, $15/mo, `include_credit = false` (gross-drawdown watch that fires
+while credits still mask spend from the B2 net budget); two budgets = still free. Verified locally:
+`fmt -check` + `validate` clean, gitleaks asset URL 200, workflow YAML parses. **Not yet committed
+or exercised on a live PR.** Remaining delegable: **B6** (remote state, post-apply only).
 
 ## What exists
 

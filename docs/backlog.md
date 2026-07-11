@@ -102,13 +102,23 @@ statement (`Bool aws:SecureTransport = false`) over the bucket + objects. Deny-o
 "public" policy, so it coexists with `block_public_policy = true`; `depends_on` the public-access
 block for explicit ordering. `fmt`+`validate` clean; not yet applied.
 
-### B5. CI: `terraform fmt -check` + `validate` on PRs
+### B5. CI: `terraform fmt -check` + `validate` on PRs — ✅ DONE 2026-07-11
 
 Add `.github/workflows/terraform-check.yml` — no AWS credentials needed (validate offline:
 `terraform init -backend=false`). Catches drift on every PR and stands up the workflows
 skeleton Wk 2 builds on. Optional stretch: tflint. **Also fold in the CI `gitleaks` scan**
 (ADR-0022 layer 3 / B10) — a full-history secret scan job in the same workflow, no creds needed.
 **Done when:** workflow green on a trivial PR; gitleaks job present.
+
+**Outcome:** `.github/workflows/terraform-check.yml` on `pull_request`→main + `push`→main,
+`permissions: contents: read`. Two independent jobs: (1) **terraform** — `fmt -check -recursive`
+(covers `sql/`), `init -backend=false`, `validate`, on pinned Terraform `1.9.8` via
+`setup-terraform@v3`, `working-directory: infra`; (2) **gitleaks** — full-history scan
+(`fetch-depth: 0`), binary pinned to **v8.21.2** (parity with the pre-commit hook), downloaded
+directly rather than via the marketplace action (avoids its org-license/telemetry path; CLI is
+Apache-2.0), `detect --redact --exit-code 1`. This closes ADR-0022 layer 3's CI half (the
+push-protection toggle is still Stephen's manual step). Validated locally: `fmt -check` + `validate`
+clean; gitleaks asset URL returns 200; YAML parses. Not yet exercised on a live PR (no push yet).
 
 ### B6. Pull remote Terraform state forward (from Wk 5 to right-after-first-apply)
 
@@ -152,6 +162,11 @@ limit just above the expected burn (~$15/mo for RDS + noise), same ACTUAL + FORE
 notifications to `budget_notification_email`. Quiet in a normal month; fires when drawdown
 exceeds the plan — i.e. it catches cost anomalies *while credits still mask them*. **Done when:**
 `terraform plan` shows both budgets; the gross budget excludes credits; still $0 (≤2 budgets).
+
+**Outcome (✅ DONE 2026-07-11):** `infra/budgets.tf` — second budget `${project}-monthly-gross`,
+$15/mo COST, `cost_types { include_credit = false, include_refund = true }`, same ACTUAL +
+FORECASTED email notifications. Two budgets total = still free. `fmt`+`validate` clean; not yet
+applied.
 
 ### B10. Secret/PII leakage gate — harden before Wk-2 sensitive commits (ADR-0022)
 
