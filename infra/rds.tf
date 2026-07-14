@@ -34,8 +34,12 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = true
 
-  multi_az                   = false
-  backup_retention_period    = 7 # free within the instance's storage allotment
+  multi_az = false
+  # The AWS Free *plan* (post-2025-07 restricted account) caps backup retention below 7 days and
+  # rejects a longer period at CreateDBInstance (FreeTierRestrictionError, 2026-07-14). 1 day keeps
+  # automated backups + PITR on while staying inside the free-plan limit; raise it after the
+  # month-6 exit off the free plan. (0 would disable automated backups entirely — avoid.)
+  backup_retention_period    = 1
   auto_minor_version_upgrade = true
   apply_immediately          = true # dev: take changes now, not in the maintenance window
 

@@ -1,9 +1,25 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-11**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-14**.
 
 ## Current phase
+
+**Wk 1 COMPLETE — infra applied + verified 2026-07-14.** `terraform apply` succeeded (20 resources:
+RDS Postgres, S3 medallion lake, OIDC `tf-plan`/`tf-apply` roles, IP-locked SG, B2+B9 budgets).
+Seed schema (`sql/0001_init.sql`) loaded over TLS `verify-full` — end-to-end connectivity proven
+(1Password creds → IP-locked SG → `rds.force_ssl=1` → cert-verified `psql`). **Account/AWS auth
+established this session:** IAM user `stephendelaney_IAM` (acct `749614773761`), `op` CLI signed in
+(desktop-app integration), RDS master password created at `op://pitch-control/rds-master/password`.
+Outputs live: lake `pitch-control-lake-749614773761`; RDS
+`pitch-control-pg.c0lwc826eflz.us-east-1.rds.amazonaws.com:5432`/db `pitchcontrol`; both OIDC role
+ARNs. **⚠️ A2 CORRECTION:** the first apply threw `FreeTierRestrictionError` on
+`backup_retention_period = 7` — the account is the restricted post-2025 **Free *plan*** (enforces
+caps, can't silently incur charges), not merely "credits, no limitations." Fixed by dropping
+retention **7→1** (`rds.tf`, **uncommitted** — commit it). See A2 note below.
+**One uncommitted change to land:** `infra/rds.tf` (`backup_retention_period 7→1`).
+
+<details><summary>Prior phase — Wk 1 skeleton (pre-apply), retained for history</summary>
 
 **Wk 1 in progress — Terraform skeleton reviewed + committed + pushed; NOT yet applied.** Phase 0
 docs complete + decision log ratified (0001–**0020**, all ✅ Accepted). Repo live:
@@ -88,6 +104,8 @@ logs warn `actions/checkout@v4` + `setup-terraform@v3` run on forced Node 24 (No
 bump action versions when convenient, non-blocking. Remaining delegable: **B6** (remote state,
 post-apply only).
 
+</details>
+
 ## What exists
 
 - `docs/` knowledge base scaffolded: ADR system, SLOs + error budget, runbooks, retros.
@@ -131,6 +149,37 @@ post-apply only).
 
 ## Immediate next actions
 
+> ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** **Wk 1 infra is applied + verified**
+> (2026-07-14). Two loose ends, then Wk 2 opens:
+>
+> 1. **Commit the one working-tree change** (`fmt`+`validate` clean; Stephen runs git):
+>    ```
+>    git add infra/rds.tf
+>    git commit -m "fix(rds): backup_retention_period 7→1 for AWS free-plan cap (FreeTierRestrictionError on apply)"
+>    ```
+> 2. **(non-blocking) Correct A2 in `backlog.md`** — the account is the restricted post-2025
+>    **Free *plan*** (enforces `FreeTierRestrictionError`, can't silently bill), not "credits, no
+>    limitations." Memory `aws-credits-plan-funding` already updated 2026-07-14. Month-6 exit
+>    framing shifts from "then real money" to "hard-stop / decide whether to upgrade to Paid Plan."
+>
+> **Then start Wk 2 — Bronze ingestion (`dlt`).** FPL→S3 + Postgres→S3 on a GitHub Actions
+> schedule, using ADR-0021's ephemeral-SG ingress (runner /32 opened at run, revoked via
+> `always()` + janitor). Wire the two OIDC role ARNs as repo vars first: `AWS_TF_PLAN_ROLE_ARN`
+> = `arn:aws:iam::749614773761:role/pitch-control-tf-plan`, `AWS_TF_APPLY_ROLE_ARN` =
+> `…/pitch-control-tf-apply`. Carry-forward (ADR-0019, lands with the first Lambda/dlt read
+> path): create the SSM `SecureString` param + grant `ssm:GetParameter`+`kms:Decrypt`, seed it
+> from 1Password, and migrate the lake-RW grant off `tf-apply` onto a dedicated runtime exec role.
+>
+> **Live infra reference:** lake `pitch-control-lake-749614773761`; RDS
+> `pitch-control-pg.c0lwc826eflz.us-east-1.rds.amazonaws.com:5432` / db `pitchcontrol` / user
+> `pitchadmin` (password `op://pitch-control/rds-master/password`); connect `verify-full` + RDS CA
+> bundle (`infra/README.md` → Connecting). SG is IP-locked — if your IP rotates, re-run the
+> `allowed_cidrs` export + `terraform apply` (README "My IP changed"). **Teardown** when done for
+> a while (stops credit drawdown): `terraform destroy` (deletion_protection off, skip_final_snapshot
+> on — clean). Still Wk-5: remote S3 state (B6), CI action-version bumps (Node 20 deprec).
+>
+> <details><summary>Prior next-actions (pre-apply, 2026-07-11) — history</summary>
+>
 > ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** the Wk 1 skeleton (`339aa63`) and the
 > **2026-07-04 pre-apply bundle (`f105681`) are committed + pushed** to `main`. Bundle =
 > B2/B3/B4/B7/B8 implemented in Terraform, B9 newly queued
@@ -176,6 +225,10 @@ post-apply only).
 > (activates the `.pre-commit-config.yaml` local gate) and enable **secret scanning + push protection**
 > in repo Settings → Code security & analysis. The gate must be live **before Wk 2** (first sensitive
 > commit). The Jekyll Pages showcase is a Wk-5+ item, not now.
+>
+> *(Both B10 toggles were completed 2026-07-11; AWS auth + `op` sign-in + apply all done 2026-07-14.)*
+>
+> </details>
 
 - [x] Stephen reviewed ADR-0003 / 0004 / 0007 / **0013** — noted unremarkable (accepted, no concerns), 2026-06-16.
 - [x] **Ratified ADR-0012, 0017, 0018** — flipped to ✅ Accepted, 2026-06-19.
@@ -219,8 +272,7 @@ Skills being practiced deliberately, not just the app output:
 
 ## Multi-week roadmap
 
-- [~] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema; PostHog SDK wired.
-  - *In progress:* `infra/` scaffolded, reviewed, committed + pushed (`339aa63`, 2026-06-30); **pending `apply`**. PostHog SDK is app-layer, still TODO.
+- [x] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema. **Infra applied + verified 2026-07-14.** PostHog SDK is app-layer (arrives with the Wk-2+ app), still TODO.
 - [ ] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
