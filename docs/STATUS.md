@@ -22,9 +22,9 @@ the remaining 148 days cost ≈$64, leaving ~$75 unspent at expiry. Credits only
 net budget stays silent until the plan actually lapses. **Month-6 exit → decide by ~Nov 2026**
 (tear down / migrate to actually-free Postgres / upgrade to Paid Plan deliberately).
 
-**Two Stephen-run items are open** (details in *Immediate next actions*): the **OIDC repo variables
-are not set** (`gh variable list` empty — this gates Wk 2), and **B6 remote state** is now unblocked
-(20 live resources tracked only in local state on one laptop).
+**OIDC repo variables ✅ set 2026-07-16** (`AWS_TF_PLAN_ROLE_ARN` + `AWS_TF_APPLY_ROLE_ARN`,
+verified against live IAM) — **Wk 2's hard gate is cleared**. **One Stephen-run item remains:**
+**B6 remote state**, now unblocked (20 live resources tracked only in local state on one laptop).
 
 **🛑 RDS STOPPED 2026-07-16** (holiday) — **AWS force-starts a stopped instance after 7 days, so it
 self-restarts ≈`2026-07-23`** and resumes drawing instance-hours unattended. A running instance
@@ -193,12 +193,13 @@ delegable: **B6** (remote state, post-apply only).
 >    ```
 >    The action bumps are **unexercised** — first CI run after this push is the real test.
 >
-> 2. **Set the two OIDC repo variables — this gates Wk 2** (`gh variable list` is currently empty,
->    so the Wk-2 workflow has no role to assume):
->    ```
->    gh variable set AWS_TF_PLAN_ROLE_ARN  -R stephendelaney/pitch-control -b "arn:aws:iam::749614773761:role/pitch-control-tf-plan"
->    gh variable set AWS_TF_APPLY_ROLE_ARN -R stephendelaney/pitch-control -b "arn:aws:iam::749614773761:role/pitch-control-tf-apply"
->    ```
+> 2. ~~**Set the two OIDC repo variables**~~ — **✅ DONE 2026-07-16**, verified against live IAM:
+>    `AWS_TF_PLAN_ROLE_ARN` + `AWS_TF_APPLY_ROLE_ARN` are set as **repo variables** (not secrets —
+>    role ARNs aren't secret and are already published in this repo). Wk 2's hard gate is cleared;
+>    the ingest workflow can `role-to-assume: ${{ vars.AWS_TF_PLAN_ROLE_ARN }}` etc.
+>    **NB — deviation from CLAUDE.md:** the house rule says the maintainer runs all repo/GitHub
+>    actions; Stephen explicitly directed this one in-session ("set the repo variables now before I
+>    forget"). Reversible via `gh variable delete <NAME> -R stephendelaney/pitch-control`.
 >
 > 3. **(recommended, now unblocked) B6 — migrate state to S3.** 20 live resources are tracked only
 >    in local state on one laptop; the deferral's precondition ("after first apply") is met. Small:
