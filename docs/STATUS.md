@@ -7,13 +7,13 @@
 
 **Wk 1 COMPLETE + loose ends closed (2026-07-16) — Wk 2 is the next real move.** The `rds.tf`
 retention fix landed (`57eb74c`); working tree clean. This session cleared the three delegable
-leftovers (**uncommitted — see Immediate next actions for the commit**): (1) **A2 corrected in
+leftovers (**all committed + pushed — `b9ce694`, CI green**): (1) **A2 corrected in
 `backlog.md`** — the account is the restricted post-2025 **Free *plan*** (enforces
 `FreeTierRestrictionError`, can't silently bill), not "credits, then real money"; (2) new runbook
 **`runbooks/orphaned-sg-rule.md`** — the ADR-0021 follow-up, covering the ephemeral-SG cleanup
 failure mode Wk 2 introduces; (3) **CI action bumps** — `actions/checkout@v4→v7` +
-`hashicorp/setup-terraform@v3→v4`, clearing the Node 20 deprecation warnings (green on the next CI
-run — not yet exercised).
+`hashicorp/setup-terraform@v3→v4` — **verified on CI run `29494537600`**: the run resolved
+`checkout@v7` + `setup-terraform@v4` and the Node 20 deprecation warnings are gone from the logs.
 
 **💰 FREE-PLAN DEADLINE PINNED (Billing console, 2026-07-16): free access ends `2026-12-11`** —
 $139.26 credits remaining, 150 days. **The date binds, not the credits:** at the ~$12–14/mo RDS burn
@@ -183,15 +183,13 @@ delegable: **B6** (remote state, post-apply only).
 ## Immediate next actions
 
 > ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** **Wk 1 is applied + verified and its loose ends
-> are closed.** Three docs/CI changes are **in the working tree, uncommitted**:
+> are closed.** Everything from 2026-07-16 is **committed + pushed; working tree clean** (`b9ce694`
+> = the three delegable items, `2164585` = the repo-variable status update). **B6 is the only open
+> item — start there, then Wk 2.**
 >
-> 1. **Commit this session's three delegable items.** Touches `.github/workflows/`, so **push via
->    GitHub Desktop** (the CLI token lacks the `workflow` scope). Pre-commit green on all three:
->    ```
->    git add docs/backlog.md docs/runbooks/orphaned-sg-rule.md .github/workflows/terraform-check.yml docs/STATUS.md
->    git commit -m "docs: correct A2 (Free plan, not credits-plan) + pin 2026-12-11 deadline; add orphaned-sg-rule runbook (ADR-0021); ci: bump checkout v7 / setup-terraform v4"
->    ```
->    The action bumps are **unexercised** — first CI run after this push is the real test.
+> 1. ~~**Commit this session's three delegable items**~~ — **✅ DONE 2026-07-16** (`b9ce694`, pushed
+>    via GitHub Desktop as it touched `.github/workflows/`). **CI green and the bumps are verified**
+>    (run `29494537600` resolved `checkout@v7` + `setup-terraform@v4`; Node 20 warnings gone).
 >
 > 2. ~~**Set the two OIDC repo variables**~~ — **✅ DONE 2026-07-16**, verified against live IAM:
 >    `AWS_TF_PLAN_ROLE_ARN` + `AWS_TF_APPLY_ROLE_ARN` are set as **repo variables** (not secrets —
