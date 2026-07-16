@@ -27,7 +27,7 @@ consumers. **Triggered follow-ups (not yet done):** runbook `runbooks/orphaned-s
 the `allowed_cidrs` comment in `infra/variables.tf` + the A1 note in `infra/README.md`; the ingest
 role joins the shared runtime exec role (ADR-0020, split-on-divergence).
 
-### A2. Free-tier regime — is the account legacy 12-month or new credits-plan? — ✅ RESOLVED 2026-07-03
+### A2. Free-tier regime — is the account legacy 12-month or new credits-plan? — ✅ RESOLVED 2026-07-03, **corrected 2026-07-14 by the first apply**
 
 **The gap:** AWS replaced the legacy 12-month free tier in **July 2025**; accounts created
 after ~2025-07-15 get a credits-based plan (~$100–200 over 6 months) with **no 750-hour RDS
@@ -38,11 +38,34 @@ right test for legacy accounts.
 free plan). Facts verified against AWS docs: $100 signup credit + up to $100 from activities
 (EC2/RDS/Lambda/Bedrock/Budgets); plan expires at **6 months or credit exhaustion, whichever
 first**; **no 750-hour RDS allowance**. Cost math: `db.t4g.micro` + 20 GB gp2 ≈ **$12–14/mo**
-(~$75–85 over 6 months, inside the credits). **Net: $0 out of pocket for ~6 months, then real
-money.** `infra/README.md` updated (age check removed; cost caveat + credits framing restated).
-**New follow-up (not blocking apply):** plan the **month-6 exit** — tear down, or migrate to an
-actually-free Postgres (e.g. Neon/Supabase free tier, or Aurora Serverless v2 min-capacity) —
-before credits lapse. Tracks as a Wk-5+ roadmap item.
+(~$75–85 over 6 months, inside the credits). `infra/README.md` updated (age check removed; cost
+caveat + credits framing restated).
+
+**⚠️ Correction (2026-07-14) — the first `terraform apply` disproved half of the above.** The apply
+failed with **`FreeTierRestrictionError`** on `backup_retention_period = 7`; dropping retention
+**7→1** fixed it (`infra/rds.tf`, committed `57eb74c`). The account is not merely "on a credits plan
+with no limitations" — it is the restricted post-2025 **Free *plan***, which **enforces caps and
+cannot silently incur charges**. It rejects out-of-cap resources at create time rather than billing
+for them.
+
+**What this changes:** the month-6 framing is **not** "then real money" — it is a **hard stop**.
+At 6 months or credit exhaustion (whichever first), the plan lapses and the decision is *explicit*:
+upgrade to the Paid Plan, or exit. Nothing starts quietly charging. The B2 net budget still works as
+the tripwire; the B9 gross budget still watches burn rate.
+
+**Deadline pinned (Billing console, 2026-07-16): free access ends `2026-12-11`** — $139.26 credits
+remaining, 150 days. **The date binds, not the credits.** At the ~$12–14/mo RDS burn, the remaining
+148 days cost ≈ **$64**, leaving ~$75 of credit unspent at expiry — so "whichever comes first"
+resolves to the **calendar**. Credits only become the binding constraint above ≈ **$28.6/mo**
+($139.26 ÷ 4.87 months), i.e. roughly double current burn. **B9's $15/mo gross budget is the
+early-warning line for that** — it fires with months of runway left, while B2's $1 net budget stays
+silent until the plan actually lapses. Re-check the break-even if Wk 2–5 adds anything non-free.
+
+**Follow-up (unchanged in substance, sharper in framing):** plan the **month-6 exit** — tear down,
+upgrade deliberately, or migrate to an actually-free Postgres (Neon/Supabase free tier, or Aurora
+Serverless v2 min-capacity) — **before `2026-12-11`**. Decide by ~**Nov 2026** so the migration
+isn't done under deadline. Tracks as a Wk-5+ roadmap item. `STATUS.md` and the
+`aws-credits-plan-funding` memory carry the correction + the date.
 
 ## B. Delegable now (no decision required)
 

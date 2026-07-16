@@ -1,9 +1,41 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-14**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-07-16**.
 
 ## Current phase
+
+**Wk 1 COMPLETE + loose ends closed (2026-07-16) — Wk 2 is the next real move.** The `rds.tf`
+retention fix landed (`57eb74c`); working tree clean. This session cleared the three delegable
+leftovers (**uncommitted — see Immediate next actions for the commit**): (1) **A2 corrected in
+`backlog.md`** — the account is the restricted post-2025 **Free *plan*** (enforces
+`FreeTierRestrictionError`, can't silently bill), not "credits, then real money"; (2) new runbook
+**`runbooks/orphaned-sg-rule.md`** — the ADR-0021 follow-up, covering the ephemeral-SG cleanup
+failure mode Wk 2 introduces; (3) **CI action bumps** — `actions/checkout@v4→v7` +
+`hashicorp/setup-terraform@v3→v4`, clearing the Node 20 deprecation warnings (green on the next CI
+run — not yet exercised).
+
+**💰 FREE-PLAN DEADLINE PINNED (Billing console, 2026-07-16): free access ends `2026-12-11`** —
+$139.26 credits remaining, 150 days. **The date binds, not the credits:** at the ~$12–14/mo RDS burn
+the remaining 148 days cost ≈$64, leaving ~$75 unspent at expiry. Credits only become binding above
+≈**$28.6/mo** (~2× current burn) — **B9's $15/mo gross budget is the early-warning line**; B2's $1
+net budget stays silent until the plan actually lapses. **Month-6 exit → decide by ~Nov 2026**
+(tear down / migrate to actually-free Postgres / upgrade to Paid Plan deliberately).
+
+**Two Stephen-run items are open** (details in *Immediate next actions*): the **OIDC repo variables
+are not set** (`gh variable list` empty — this gates Wk 2), and **B6 remote state** is now unblocked
+(20 live resources tracked only in local state on one laptop).
+
+**🛑 RDS STOPPED 2026-07-16** (holiday) — **AWS force-starts a stopped instance after 7 days, so it
+self-restarts ≈`2026-07-23`** and resumes drawing instance-hours unattended. A running instance
+after that date is *expected*, not drift. Stopping pauses instance-hours (~$11/mo) but **storage
+keeps drawing** (20 GB gp2 + backups, ~$2.30/mo) — the week saves ≈$2.60. Note this saves credits
+that would **expire unused anyway** (the date binds, not the credits — see above), so it's hygiene,
+not runway. No Terraform impact: `aws_db_instance` doesn't track running state, so `plan` stays
+clean — but don't `apply` while stopped (some modifications need a running instance). For a longer
+pause, `terraform destroy` is the real lever (deletion_protection off, skip_final_snapshot on).
+
+<details><summary>Prior phase — Wk 1 applied + verified (2026-07-14)</summary>
 
 **Wk 1 COMPLETE — infra applied + verified 2026-07-14.** `terraform apply` succeeded (20 resources:
 RDS Postgres, S3 medallion lake, OIDC `tf-plan`/`tf-apply` roles, IP-locked SG, B2+B9 budgets).
@@ -16,8 +48,7 @@ Outputs live: lake `pitch-control-lake-749614773761`; RDS
 ARNs. **⚠️ A2 CORRECTION:** the first apply threw `FreeTierRestrictionError` on
 `backup_retention_period = 7` — the account is the restricted post-2025 **Free *plan*** (enforces
 caps, can't silently incur charges), not merely "credits, no limitations." Fixed by dropping
-retention **7→1** (`rds.tf`, **uncommitted** — commit it). See A2 note below.
-**One uncommitted change to land:** `infra/rds.tf` (`backup_retention_period 7→1`).
+retention **7→1** (`rds.tf`, since committed as `57eb74c`). See A2 note below.
 
 <details><summary>Prior phase — Wk 1 skeleton (pre-apply), retained for history</summary>
 
@@ -101,8 +132,10 @@ while credits still mask spend from the B2 net budget); two budgets = still free
 Desktop (the CLI HTTPS token lacked the `workflow` scope needed to push `.github/workflows/`).
 **First CI run green** — both jobs pass (`gitleaks` 3s, `fmt+validate` 18s). Low-pri follow-up: CI
 logs warn `actions/checkout@v4` + `setup-terraform@v3` run on forced Node 24 (Node 20 deprecation) —
-bump action versions when convenient, non-blocking. Remaining delegable: **B6** (remote state,
-post-apply only).
+bump action versions when convenient, non-blocking *(done 2026-07-16 — v7 / v4)*. Remaining
+delegable: **B6** (remote state, post-apply only).
+
+</details>
 
 </details>
 
@@ -149,25 +182,37 @@ post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** **Wk 1 infra is applied + verified**
-> (2026-07-14). Two loose ends, then Wk 2 opens:
+> ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** **Wk 1 is applied + verified and its loose ends
+> are closed.** Three docs/CI changes are **in the working tree, uncommitted**:
 >
-> 1. **Commit the one working-tree change** (`fmt`+`validate` clean; Stephen runs git):
+> 1. **Commit this session's three delegable items.** Touches `.github/workflows/`, so **push via
+>    GitHub Desktop** (the CLI token lacks the `workflow` scope). Pre-commit green on all three:
 >    ```
->    git add infra/rds.tf
->    git commit -m "fix(rds): backup_retention_period 7→1 for AWS free-plan cap (FreeTierRestrictionError on apply)"
+>    git add docs/backlog.md docs/runbooks/orphaned-sg-rule.md .github/workflows/terraform-check.yml docs/STATUS.md
+>    git commit -m "docs: correct A2 (Free plan, not credits-plan) + pin 2026-12-11 deadline; add orphaned-sg-rule runbook (ADR-0021); ci: bump checkout v7 / setup-terraform v4"
 >    ```
-> 2. **(non-blocking) Correct A2 in `backlog.md`** — the account is the restricted post-2025
->    **Free *plan*** (enforces `FreeTierRestrictionError`, can't silently bill), not "credits, no
->    limitations." Memory `aws-credits-plan-funding` already updated 2026-07-14. Month-6 exit
->    framing shifts from "then real money" to "hard-stop / decide whether to upgrade to Paid Plan."
+>    The action bumps are **unexercised** — first CI run after this push is the real test.
+>
+> 2. **Set the two OIDC repo variables — this gates Wk 2** (`gh variable list` is currently empty,
+>    so the Wk-2 workflow has no role to assume):
+>    ```
+>    gh variable set AWS_TF_PLAN_ROLE_ARN  -R stephendelaney/pitch-control -b "arn:aws:iam::749614773761:role/pitch-control-tf-plan"
+>    gh variable set AWS_TF_APPLY_ROLE_ARN -R stephendelaney/pitch-control -b "arn:aws:iam::749614773761:role/pitch-control-tf-apply"
+>    ```
+>
+> 3. **(recommended, now unblocked) B6 — migrate state to S3.** 20 live resources are tracked only
+>    in local state on one laptop; the deferral's precondition ("after first apply") is met. Small:
+>    add the state bucket + flip `backend.tf`, then Stephen runs `terraform init -migrate-state`.
 >
 > **Then start Wk 2 — Bronze ingestion (`dlt`).** FPL→S3 + Postgres→S3 on a GitHub Actions
 > schedule, using ADR-0021's ephemeral-SG ingress (runner /32 opened at run, revoked via
-> `always()` + janitor). Wire the two OIDC role ARNs as repo vars first: `AWS_TF_PLAN_ROLE_ARN`
-> = `arn:aws:iam::749614773761:role/pitch-control-tf-plan`, `AWS_TF_APPLY_ROLE_ARN` =
-> `…/pitch-control-tf-apply`. Carry-forward (ADR-0019, lands with the first Lambda/dlt read
-> path): create the SSM `SecureString` param + grant `ssm:GetParameter`+`kms:Decrypt`, seed it
+> `always()` + janitor). **The new [`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md)
+> prescribes the stamping convention the ingest workflow must implement** — rule description
+> `ci-ingest-ephemeral run=<run_id>` + tags `ManagedBy`/`RunId`/`CreatedAt`; orphan detection keys
+> off that stamp, so build the workflow to match. Note `terraform plan` **cannot** see an orphaned
+> rule (ingress is discrete `aws_vpc_security_group_ingress_rule` resources, not inline blocks) —
+> a clean plan is not proof of cleanup. Carry-forward (ADR-0019, lands with the first Lambda/dlt
+> read path): create the SSM `SecureString` param + grant `ssm:GetParameter`+`kms:Decrypt`, seed it
 > from 1Password, and migrate the lake-RW grant off `tf-apply` onto a dedicated runtime exec role.
 >
 > **Live infra reference:** lake `pitch-control-lake-749614773761`; RDS
@@ -176,7 +221,8 @@ post-apply only).
 > bundle (`infra/README.md` → Connecting). SG is IP-locked — if your IP rotates, re-run the
 > `allowed_cidrs` export + `terraform apply` (README "My IP changed"). **Teardown** when done for
 > a while (stops credit drawdown): `terraform destroy` (deletion_protection off, skip_final_snapshot
-> on — clean). Still Wk-5: remote S3 state (B6), CI action-version bumps (Node 20 deprec).
+> on — clean). **Free-plan hard stop: `2026-12-11`** — plan the exit by ~Nov 2026 (see *Current
+> phase*). B6 (remote state) is pulled forward to now; CI action bumps done 2026-07-16.
 >
 > <details><summary>Prior next-actions (pre-apply, 2026-07-11) — history</summary>
 >
