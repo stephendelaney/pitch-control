@@ -136,7 +136,9 @@ skeleton Wk 2 builds on. Optional stretch: tflint. **Also fold in the CI `gitlea
 **Outcome:** `.github/workflows/terraform-check.yml` on `pull_request`→main + `push`→main,
 `permissions: contents: read`. Two independent jobs: (1) **terraform** — `fmt -check -recursive`
 (covers `sql/`), `init -backend=false`, `validate`, on pinned Terraform `1.9.8` via
-`setup-terraform@v3`, `working-directory: infra`; (2) **gitleaks** — full-history scan
+`setup-terraform@v3`, `working-directory: infra` *(both since bumped — `setup-terraform@v4`
+2026-07-16, TF pin → `1.15.6` by B6 2026-08-01 for the `use_lockfile` ≥1.10 floor)*;
+(2) **gitleaks** — full-history scan
 (`fetch-depth: 0`), binary pinned to **v8.21.2** (parity with the pre-commit hook), downloaded
 directly rather than via the marketplace action (avoids its org-license/telemetry path; CLI is
 Apache-2.0), `detect --redact --exit-code 1`. This closes ADR-0022 layer 3's CI half (the

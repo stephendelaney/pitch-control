@@ -72,7 +72,8 @@ aws iam list-open-id-connect-providers
 
 ## Prerequisites
 
-- Terraform ≥ 1.9 (v1.15.6 installed), AWS CLI authenticated to the target account.
+- Terraform **≥ 1.10** (v1.15.6 installed) — a hard floor, not a preference: the S3 backend's
+  `use_lockfile` (B6) landed in 1.10. AWS CLI authenticated to the target account.
 - 1Password CLI (`op`), signed in — secrets are read from the vault, not from disk (ADR-0019).
 - `psql` (and/or Postico as a GUI) if you want to apply the seed schema / browse the DB.
 - The **Amazon RDS CA bundle**, for `sslmode=verify-full` (see [Connecting (TLS)](#connecting-tls)):

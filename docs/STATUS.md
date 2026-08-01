@@ -32,13 +32,19 @@ instance after 7 days, so it **self-restarted ≈2026-07-23** and has been drawi
 since — *expected, not drift*. Nothing to reconcile in Terraform (`aws_db_instance` doesn't track
 running state).
 
-**💰 FREE-PLAN DEADLINE: `2026-12-11` — ~132 days left as of today.** The **date binds, not the
-credits** (pinned in the Billing console 2026-07-16: $139.26 remaining, and at the ~$12–14/mo burn
-roughly $75 of it will expire unspent). So B9's **$15/mo gross budget is the early-warning line**;
+**💰 FREE-PLAN DEADLINE: `2026-12-11` — 134 days left (Billing console, 2026-08-01: $135.48
+remaining).** Burn is now **measured, not estimated**: $139.26 → $135.48 = **$3.78 over 16 days**
+≈ $0.24/day (**≈$7.2/mo blended**, including the 7-day stop). Backing the stop out gives a steady
+running rate of ≈**$0.36/day ≈ $11/mo** — at or just below the $12–14/mo originally assumed.
+
+**The date binds, not the credits — now decisively.** 134 days × $0.36 ≈ **$48 projected spend**,
+so **≈$87 of the $135.48 will expire unused**. Credits would only become the binding constraint
+above ≈**$30/mo** (~2.8× current burn). That puts **B9's $15/mo gross budget in exactly the right
+place** — ~2× current, well under the $30 line — so it fires on a genuine anomaly, not on drift.
 B2's $1 net budget stays silent until the plan actually lapses. **Month-6 exit → decide by ~Nov
-2026** (tear down / migrate to actually-free Postgres / upgrade to Paid Plan deliberately). Worth a
-fresh Billing-console glance next session — the figure above is three weeks stale and the instance
-has been running unattended since ≈07-23.
+2026** (tear down / migrate to actually-free Postgres / upgrade to Paid Plan deliberately).
+*(Console "days remaining" counts ~2 days looser than a calendar count to Dec 11; using its
+number.)*
 
 <details><summary>Prior phase — Wk 1 complete + loose ends closed (2026-07-16)</summary>
 
