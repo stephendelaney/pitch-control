@@ -1,0 +1,6 @@
+# Bronze ingestion runtime (ADR-0010). Pinned exactly: the ingest job runs unattended on a
+# schedule, so a surprise minor bump must not be the reason a 06:00 run fails.
+#
+# `filesystem` is the S3/local destination extra (ADR-0003 — Bronze lands as raw JSONL in
+# s3://<lake>/bronze/<source>/). It pulls in s3fs/fsspec; no database driver is needed here.
+dlt[filesystem]==1.29.1

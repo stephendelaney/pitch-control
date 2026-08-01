@@ -1,0 +1,55 @@
+# CI guard for ingest/ — the Python half of the B5 backstop.
+#
+# `ingest-bronze.yml` runs these same tests, but only on its 06:00 schedule or a manual
+# dispatch. Without this workflow a PR that breaks gameweek selection merges green and is
+# discovered by a failed unattended run the next morning. Same reasoning as terraform-check:
+# catch it at review time, not in production.
+#
+# No AWS credentials and no network: the tests are pure-function tests over hand-built
+# fixtures (ADR-0011 — never make the suite depend on an unofficial API being up).
+name: ingest-check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ingest/**"
+      - ".github/workflows/ingest-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ingest/**"
+      - ".github/workflows/ingest-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: ingest unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ingest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # Keep in lockstep with ingest-bronze.yml — testing on a different interpreter to
+          # the one that runs the job defeats the point.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: ingest/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: pytest
+        run: pytest -q
+
+      # Cheap import check: catches a syntax error or bad import in the pipeline modules,
+      # which the unit tests alone would not (they only import fpl.gameweeks).
+      - name: Import check
+        run: python -c "import run_fpl, fpl.source; print('ingest modules import cleanly')"

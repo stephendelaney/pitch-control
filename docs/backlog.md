@@ -23,9 +23,19 @@ start-of-run sweep + scheduled janitor for orphans). SG grant/revoke is a narrow
 policy on the **runtime ingest role** (ADR-0020, not `tf-apply`). $0, no new standing infra; TLS
 `verify-full` holds on every path. In-VPC Lambda (option 1, SG-to-SG) is the end-state — deferred to
 the ADR-0015 API buildout, where the paid-SSM-interface-endpoint cost gets decided once for both
-consumers. **Triggered follow-ups (not yet done):** runbook `runbooks/orphaned-sg-rule.md`; refresh
-the `allowed_cidrs` comment in `infra/variables.tf` + the A1 note in `infra/README.md`; the ingest
-role joins the shared runtime exec role (ADR-0020, split-on-divergence).
+consumers.
+
+**Triggered follow-ups:**
+- ✅ **Runbook `runbooks/orphaned-sg-rule.md`** — written 2026-07-16 (`b9ce694`).
+- ✅ **Runtime ingest role exists** — `infra/iam_ingest.tf`, 2026-08-01. Created with the
+  FPL→Bronze slice, which needs only `bronze/*` write; this also let `tf-apply` be narrowed off
+  whole-lake RW (the ADR-0019/0020 follow-up `iam_oidc.tf` had parked). **The SG
+  authorize/revoke grant is deliberately NOT on it yet** — the FPL job reaches a public
+  endpoint and has no consumer for it. It lands with the Postgres→S3 job that needs it.
+- ⬜ **The ephemeral-SG workflow itself** — unbuilt; arrives with Postgres→S3, along with the
+  ADR-0019 SSM param + `ssm:GetParameter`/`kms:Decrypt` grant.
+- ⬜ **Refresh the `allowed_cidrs` comment** in `infra/variables.tf` + the A1 note in
+  `infra/README.md` — still stale, cheap to do alongside the above.
 
 ### A2. Free-tier regime — is the account legacy 12-month or new credits-plan? — ✅ RESOLVED 2026-07-03, **corrected 2026-07-14 by the first apply**
 

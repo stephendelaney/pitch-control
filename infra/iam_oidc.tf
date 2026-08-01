@@ -88,16 +88,22 @@ data "aws_iam_policy_document" "tf_apply_trust" {
 
 resource "aws_iam_role" "tf_apply" {
   name               = "${var.project}-tf-apply"
-  description        = "GitHub Actions OIDC, WRITE (main only). `terraform apply` + Wk-2 lake write. (ADR-0020)"
+  description        = "GitHub Actions OIDC, WRITE (main only). `terraform apply` — infra management only. (ADR-0020)"
   assume_role_policy = data.aws_iam_policy_document.tf_apply_trust.json
 }
 
-# Starter permissions: read/write the medallion lake — the FIRST real use of a CI role, the
-# Wk 2 dlt jobs landing Bronze in S3 from Actions (runs on main). Attached to tf-apply, the
-# main-pinned write identity. NOTE: when the dedicated shared runtime exec role lands
-# (ADR-0019/0020 Wk-2 follow-up), this data-plane write MIGRATES there so tf-apply holds only
-# infra-management authority — do not let dlt and `terraform apply` share a role long-term.
-data "aws_iam_policy_document" "lake_rw" {
+# Lake object access for tf-apply, narrowed to what Terraform itself manages.
+#
+# This used to be blanket read/write over the whole lake, parked here as "starter permissions"
+# because the Wk-2 dlt jobs had nowhere else to live. That follow-up is now done: dlt assumes
+# the dedicated runtime role in `iam_ingest.tf`, which holds bronze/* and nothing more. What
+# remains for tf-apply is the only lake object Terraform is the author of — the zero-byte
+# `.keep` markers in `s3.tf` that document the medallion layout.
+#
+# So tf-apply keeps infra-management authority and loses data-plane authority: it can no
+# longer read a Bronze payload or overwrite a Gold mart, neither of which `terraform apply`
+# has any business doing.
+data "aws_iam_policy_document" "lake_markers" {
   statement {
     sid       = "ListLakeBucket"
     effect    = "Allow"
@@ -106,15 +112,15 @@ data "aws_iam_policy_document" "lake_rw" {
   }
 
   statement {
-    sid       = "ReadWriteLakeObjects"
+    sid       = "ManageLayerMarkers"
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.lake.arn}/*"]
+    resources = [for layer in local.medallion_layers : "${aws_s3_bucket.lake.arn}/${layer}/.keep"]
   }
 }
 
-resource "aws_iam_role_policy" "lake_rw" {
-  name   = "${var.project}-lake-rw"
+resource "aws_iam_role_policy" "lake_markers" {
+  name   = "${var.project}-lake-markers"
   role   = aws_iam_role.tf_apply.id
-  policy = data.aws_iam_policy_document.lake_rw.json
+  policy = data.aws_iam_policy_document.lake_markers.json
 }

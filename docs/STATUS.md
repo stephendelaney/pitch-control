@@ -5,7 +5,44 @@
 
 ## Current phase
 
-**B6 DONE — state lives in S3; Wk 1 is fully closed. Wk 2 is the next move (2026-08-01).**
+**Wk 2 STARTED — FPL→Bronze is built and verified locally; ⚠️ uncommitted and not yet applied
+(2026-08-01).** Wk 1 is fully closed: B6 landed as `d48c1e8` + `6d9aae4` and **CI is green on
+the new Terraform pin** (run `30698846678`, 21s) — the one thing flagged as "could bite" if the
+1.15.6 pin and the `>= 1.10` floor disagreed. They don't. Remote state is real and proven.
+
+This session built the **first half of Bronze ingestion — FPL → S3**, deliberately taken first
+because it needs *only* an S3 write: no RDS network path, no secret. That isolates ADR-0021's
+ephemeral-SG machinery and ADR-0019's SSM fetch into the Postgres slice instead of entangling
+all of it in one step.
+
+**What was built** (all `fmt`/`validate`/`pre-commit` clean, 20 unit tests passing):
+- **`ingest/`** — dlt pipeline, run end-to-end against a local destination and diffed against
+  the live API: **9 tables, 1,052 rows, 0 non-null source values lost** across 564 × 105
+  fields. Bronze lands as `bronze/fpl/<collection>/load_date=YYYY-MM-DD/*.jsonl.gz`.
+- **`infra/iam_ingest.tf`** — the dedicated runtime ingest role (ADR-0020), main-pinned,
+  granted `bronze/*` and nothing else. This **closes the ADR-0019/0020 follow-up** that
+  `iam_oidc.tf` parked: `tf-apply`'s blanket lake-RW is now narrowed to the three `.keep`
+  markers Terraform actually authors, so deploy authority no longer carries data-plane
+  authority.
+- **Two workflows** — `ingest-bronze.yml` (daily 06:00 UTC + dispatch, OIDC, backfill input)
+  and `ingest-check.yml` (pytest on PRs — without it the tests would only run *after* merge,
+  on the schedule).
+
+**Three findings worth carrying forward** (details in [`ingest/README.md`](../ingest/README.md)):
+1. **It is pre-season.** GW1 is `is_next`, nothing is current or finished, so `event_live`
+   correctly loads **zero rows**. That is a successful run, not a failure — and the automated
+   tests encode it, so the suite doesn't start failing every August.
+2. **dlt's default normalisation had to be turned off** (`max_table_nesting=0`). Left on, it
+   exploded nested JSON into child tables like
+   `game_meta__game_config__rules__percentile_ranks` — a relational transformation Bronze must
+   not do (ADR-0003), and one that would add/drop whole tables on any upstream nesting change.
+3. **Null fields are absent, not `null`** — lossless, but a field null for *every* row has no
+   column at all (currently `ep_this`, `squad_number`). **Silver must treat a missing column as
+   null rather than assume presence.**
+
+<details><summary>Prior phase — B6 remote state, Wk 1 closed (2026-08-01)</summary>
+
+**B6 DONE — state lives in S3; Wk 1 is fully closed.**
 **`infra/tfstate.tf`** applied cleanly (**8 added, 0 changed, 0 destroyed**) — S3 state bucket
 `pitch-control-tfstate-749614773761`, versioned, SSE-S3, TLS-only deny policy, `prevent_destroy`,
 365-day noncurrent retention — plus the two CI state grants. `backend.tf` is now `backend "s3"` with
@@ -184,8 +221,15 @@ delegable: **B6** (remote state, post-apply only).
 
 </details>
 
+</details>
+
 ## What exists
 
+- **`ingest/`** — the Wk-2 Bronze pipeline (FPL→S3). dlt source + pure gameweek-selection rule
+  + 20 unit tests + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
+  contract Silver will read against (JSONL/gzip, Hive `load_date=` partition, nesting kept
+  inline, absent-means-null). Runs via `.github/workflows/ingest-bronze.yml`; guarded on PRs by
+  `ingest-check.yml`. **Built + locally verified, not yet applied or pushed.**
 - `docs/` knowledge base scaffolded: ADR system, SLOs + error budget, runbooks, retros.
 - ADRs **0001** (record decisions) and **0002** (Postgres + JSONB) written and Accepted.
 - ADRs **0003** (S3 + Parquet Medallion lake), **0004** (DuckDB engine), **0007** (GitHub Actions +
@@ -227,38 +271,75 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ NOT a clean boundary: B6 is applied but UNCOMMITTED.** The
-> infrastructure change is done and verified; the code describing it is still only in the working
-> tree. **Land it first, before anything else** — if this tree is lost, live AWS resources have no
-> committed source. Two steps:
+> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ NOT a clean boundary: the FPL→Bronze slice is built and
+> locally verified, but UNCOMMITTED and UNAPPLIED.** Nothing is broken and nothing is live; the
+> work simply exists only in this working tree. Four steps, in order — 1 and 2 are independent
+> of each other, but 3 needs both.
 >
-> 1. **Commit + push — via GitHub Desktop.** The bundle touches `.github/workflows/`
->    (`terraform_version` 1.9.8 → 1.15.6, forced by the `use_lockfile` ≥1.10 floor), and the CLI
->    HTTPS token lacks the `workflow` scope. Files: `infra/tfstate.tf` (new), `infra/backend.tf`,
->    `infra/versions.tf`, `infra/outputs.tf`, `infra/README.md`,
->    `.github/workflows/terraform-check.yml`, `docs/STATUS.md`, `docs/backlog.md`. Suggested message:
->    `feat(infra): B6 — remote S3 state w/ native locking; TF floor >=1.10`
+> **1. Commit + push — via GitHub Desktop.** The bundle adds `.github/workflows/`, and the CLI
+> HTTPS token lacks the `workflow` scope. New: `ingest/**` (9 files), `infra/iam_ingest.tf`,
+> `.github/workflows/ingest-bronze.yml`, `.github/workflows/ingest-check.yml`. Modified:
+> `infra/iam_oidc.tf`, `infra/outputs.tf`, `.gitignore`, `docs/STATUS.md`, `docs/backlog.md`.
+> Suggested message: `feat(ingest): Wk2 — FPL→Bronze dlt pipeline + runtime ingest role`
+> *(`ingest-check.yml` is path-filtered to `ingest/**`, so it runs on this push; `gitleaks` and
+> `terraform-check` run too. Expect three green workflows.)*
 >
-> 2. **Confirm CI is green** on the new TF pin — job 1 runs `init -backend=false`, so it never
->    touches the state bucket, but it *will* enforce `required_version >= 1.10`. This is the one
->    thing that could bite: if the pin and the floor disagree, `init` fails.
+> **2. `terraform apply`** (Stephen runs this). Expect roughly **3 added, 1 changed, 1
+> destroyed**, all IAM and all free:
+> ```
+> cd infra
+> export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
+> export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
+> export TF_VAR_budget_notification_email='<the address B2 already uses>'
+> terraform plan     # sanity-check the destroy below before applying
+> terraform apply
+> ```
+> ⚠️ The **destroy is expected and safe**: `aws_iam_role_policy.lake_rw` is replaced by
+> `lake_markers`, which narrows `tf-apply` from whole-lake read/write down to the three `.keep`
+> objects Terraform authors. Nothing consumes the old grant — the dlt jobs use the new
+> `pitch-control-ingest` role. All four `TF_VAR`s must be exported **in the same shell** as the
+> apply (they don't survive between commands run separately).
+>
+> **3. Set two repo variables** (Settings → Secrets and variables → Actions → Variables), the
+> same pattern as the existing OIDC vars:
+> ```
+> AWS_INGEST_ROLE_ARN        = $(terraform output -raw ingest_role_arn)
+> PITCH_CONTROL_LAKE_BUCKET  = pitch-control-lake-749614773761
+> ```
+> The workflow **hard-fails if `PITCH_CONTROL_LAKE_BUCKET` is unset** rather than silently
+> writing Bronze to a runner's disk and reporting success.
+>
+> **4. Dispatch the workflow manually** (Actions → ingest-bronze → Run workflow, leave backfill
+> blank) instead of waiting for 06:00. This is the **first real proof of the OIDC→S3 write
+> path**; everything before it was verified against local disk. Then confirm the objects landed:
+> ```
+> aws s3 ls s3://pitch-control-lake-749614773761/bronze/fpl/ --recursive | head
+> ```
+> Expect **9 prefixes and zero `event_live` rows** — pre-season, which is a correct no-op, not a
+> failure (see *Current phase*).
+>
+> **Then: the second half of Wk 2 — Postgres→S3.** This is where the deferred machinery lands,
+> and it is a bigger step than the FPL half:
+> - **ADR-0021 ephemeral SG ingress** — authorize the runner's /32 on 5432, run, revoke via
+>   `if: always()`, plus a start-of-run sweep and a scheduled janitor.
+>   **[`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md) prescribes the stamping
+>   convention the workflow must implement** — rule description `ci-ingest-ephemeral
+>   run=<run_id>` + tags `ManagedBy`/`RunId`/`CreatedAt`; orphan detection keys off that stamp,
+>   so build to match. Note `terraform plan` **cannot** see an orphaned rule (ingress is discrete
+>   `aws_vpc_security_group_ingress_rule` resources, not inline blocks) — **a clean plan is not
+>   proof of cleanup.**
+> - **ADR-0019 secret path** — create the SSM `SecureString` param, seed it from 1Password, and
+>   grant `ssm:GetParameter` + `kms:Decrypt`.
+> - Both IAM grants go on the **`pitch-control-ingest` role**, never `tf-apply` — the closing
+>   comment in [`infra/iam_ingest.tf`](../infra/iam_ingest.tf) lists them precisely.
+> - The RDS CA bundle is **gitignored** (`*.pem`), so the workflow must `curl` it for
+>   `verify-full` — it cannot read it from the repo.
 >
 > *(Housekeeping ✅ done 2026-08-01: the post-migration leftovers `infra/terraform.tfstate` +
 > `terraform.tfstate.backup` are deleted — both held the RDS password in plaintext. Neither was a
 > commit risk: `.gitignore` covers them via `*.tfstate` **and** `*.tfstate.*` — note the second
 > pattern is what catches `.backup`, since `*.tfstate` alone would not. Rollback is now S3 object
 > versioning on the state bucket.)*
->
-> **Then start Wk 2 — Bronze ingestion (`dlt`).** FPL→S3 + Postgres→S3 on a GitHub Actions
-> schedule, using ADR-0021's ephemeral-SG ingress (runner /32 opened at run, revoked via
-> `always()` + janitor). **The new [`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md)
-> prescribes the stamping convention the ingest workflow must implement** — rule description
-> `ci-ingest-ephemeral run=<run_id>` + tags `ManagedBy`/`RunId`/`CreatedAt`; orphan detection keys
-> off that stamp, so build the workflow to match. Note `terraform plan` **cannot** see an orphaned
-> rule (ingress is discrete `aws_vpc_security_group_ingress_rule` resources, not inline blocks) —
-> a clean plan is not proof of cleanup. Carry-forward (ADR-0019, lands with the first Lambda/dlt
-> read path): create the SSM `SecureString` param + grant `ssm:GetParameter`+`kms:Decrypt`, seed it
-> from 1Password, and migrate the lake-RW grant off `tf-apply` onto a dedicated runtime exec role.
 >
 > **Live infra reference:** lake `pitch-control-lake-749614773761`; RDS
 > `pitch-control-pg.c0lwc826eflz.us-east-1.rds.amazonaws.com:5432` / db `pitchcontrol` / user
@@ -367,6 +448,8 @@ Skills being practiced deliberately, not just the app output:
 
 - [x] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema. **Infra applied + verified 2026-07-14.** PostHog SDK is app-layer (arrives with the Wk-2+ app), still TODO.
 - [ ] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
+  **FPL→S3 built + locally verified 2026-08-01** (uncommitted/unapplied — see *Immediate next
+  actions*); **Postgres→S3 not started** (needs ADR-0021 ephemeral SG + ADR-0019 SSM secret).
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.

@@ -7,6 +7,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
+# pytest writes its own .gitignore inside this dir, so it self-ignores — listed anyway so the
+# rule is explicit rather than dependent on a tool's internals.
+.pytest_cache/
 .venv/
 venv/
 env/
@@ -46,6 +49,9 @@ override.tf.json
 *.parquet
 data/
 tmp/
+# `run_fpl.py --dry-run` writes a full Bronze tree here. Real FPL payloads — not secret, but
+# megabytes of source data that belong in the lake, not in git.
+_local_bronze/
 
 # Node / frontend
 node_modules/

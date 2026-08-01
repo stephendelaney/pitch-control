@@ -34,6 +34,11 @@ output "tf_plan_role_arn" {
 }
 
 output "tf_apply_role_arn" {
-  description = "Write OIDC role (main-pinned) for `terraform apply` + Wk-2 lake write (repo var: AWS_TF_APPLY_ROLE_ARN). ADR-0020."
+  description = "Write OIDC role (main-pinned) for `terraform apply`, infra management only (repo var: AWS_TF_APPLY_ROLE_ARN). ADR-0020."
   value       = aws_iam_role.tf_apply.arn
+}
+
+output "ingest_role_arn" {
+  description = "Runtime OIDC role (main-pinned) for the dlt Bronze jobs; writes bronze/* only (repo var: AWS_INGEST_ROLE_ARN). ADR-0020/0021."
+  value       = aws_iam_role.ingest.arn
 }
