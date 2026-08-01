@@ -5,28 +5,40 @@
 
 ## Current phase
 
-**Wk 2 STARTED — FPL→Bronze is built and verified locally; ⚠️ uncommitted and not yet applied
-(2026-08-01).** Wk 1 is fully closed: B6 landed as `d48c1e8` + `6d9aae4` and **CI is green on
-the new Terraform pin** (run `30698846678`, 21s) — the one thing flagged as "could bite" if the
-1.15.6 pin and the `>= 1.10` floor disagreed. They don't. Remote state is real and proven.
+**Wk 2 HALF DONE — FPL→Bronze is LIVE in S3, end-to-end, on the runtime ingest role
+(2026-08-01).** Wk 1 is fully closed: B6 landed as `d48c1e8` + `6d9aae4`, CI green on the new
+Terraform pin (run `30698846678`) — the 1.15.6 pin and the `>= 1.10` floor agree.
 
-This session built the **first half of Bronze ingestion — FPL → S3**, deliberately taken first
+This session built and shipped the **first half of Bronze ingestion — FPL → S3**, taken first
 because it needs *only* an S3 write: no RDS network path, no secret. That isolates ADR-0021's
 ephemeral-SG machinery and ADR-0019's SSM fetch into the Postgres slice instead of entangling
-all of it in one step.
+all of it in one step. **Postgres→S3 is not started** — it is the whole remaining half of Wk 2.
 
-**What was built** (all `fmt`/`validate`/`pre-commit` clean, 20 unit tests passing):
-- **`ingest/`** — dlt pipeline, run end-to-end against a local destination and diffed against
-  the live API: **9 tables, 1,052 rows, 0 non-null source values lost** across 564 × 105
-  fields. Bronze lands as `bronze/fpl/<collection>/load_date=YYYY-MM-DD/*.jsonl.gz`.
-- **`infra/iam_ingest.tf`** — the dedicated runtime ingest role (ADR-0020), main-pinned,
-  granted `bronze/*` and nothing else. This **closes the ADR-0019/0020 follow-up** that
-  `iam_oidc.tf` parked: `tf-apply`'s blanket lake-RW is now narrowed to the three `.keep`
-  markers Terraform actually authors, so deploy authority no longer carries data-plane
-  authority.
+**Proven, not just built** — dispatched run
+[`30713843583`](https://github.com/stephendelaney/pitch-control/actions/runs/30713843583)
+succeeded in **21s**: OIDC assumed `pitch-control-ingest`, and **14 objects / 161 KB** landed
+at `s3://pitch-control-lake-749614773761/bronze/fpl/`. Verified in the console listing.
+
+**What exists now** (commit `d701cbe`; `ingest-check` + `terraform-check` both green):
+- **`ingest/`** — dlt pipeline. **9 tables, 1,052 rows, 0 non-null source values lost** across
+  564 × 105 fields (diffed against the live API). Layout:
+  `bronze/fpl/<collection>/load_date=YYYY-MM-DD/*.jsonl.gz`. dlt's own
+  `_dlt_pipeline_state/` lives in S3 too, so **incremental state survives ephemeral runners** —
+  nothing depends on a runner's disk.
+- **`infra/iam_ingest.tf`** — dedicated runtime ingest role (ADR-0020), main-pinned. **Applied
+  and verified against live IAM:** `pitch-control-ingest` holds `bronze/*` and nothing else;
+  `tf-apply` is down to the three `.keep` keys plus its B6 state grant — `lake_rw` is **gone**.
+  This **closes the ADR-0019/0020 follow-up** `iam_oidc.tf` had parked: deploy authority no
+  longer carries data-plane authority.
 - **Two workflows** — `ingest-bronze.yml` (daily 06:00 UTC + dispatch, OIDC, backfill input)
   and `ingest-check.yml` (pytest on PRs — without it the tests would only run *after* merge,
-  on the schedule).
+  on the schedule). Repo variables `AWS_INGEST_ROLE_ARN` + `PITCH_CONTROL_LAKE_BUCKET` are set.
+
+**Gotcha banked (cost one failed apply):** **IAM role `description` rejects an em dash.** AWS
+validates it against a pattern that stops at U+00FF, so this repo's usual `—` fails
+`UpdateRoleDescription` with a `ValidationError` — mid-apply, after other resources have already
+changed. Plain hyphens only in that field; the constraint is now a comment in `iam_oidc.tf`.
+(The apply is idempotent — re-running after the fix converged cleanly.)
 
 **Three findings worth carrying forward** (details in [`ingest/README.md`](../ingest/README.md)):
 1. **It is pre-season.** GW1 is `is_next`, nothing is current or finished, so `event_live`

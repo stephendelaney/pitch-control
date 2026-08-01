@@ -87,8 +87,11 @@ data "aws_iam_policy_document" "tf_apply_trust" {
 }
 
 resource "aws_iam_role" "tf_apply" {
-  name               = "${var.project}-tf-apply"
-  description        = "GitHub Actions OIDC, WRITE (main only). `terraform apply` — infra management only. (ADR-0020)"
+  name = "${var.project}-tf-apply"
+  # NB: no em dash in this field. AWS validates role descriptions against a character pattern
+  # that stops at U+00FF, so the punctuation used everywhere else in this repo fails
+  # UpdateRoleDescription with a ValidationError. Plain hyphens only here.
+  description        = "GitHub Actions OIDC, WRITE (main only). `terraform apply` - infra management only. (ADR-0020)"
   assume_role_policy = data.aws_iam_policy_document.tf_apply_trust.json
 }
 
