@@ -241,7 +241,7 @@ delegable: **B6** (remote state, post-apply only).
   + 20 unit tests + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
   contract Silver will read against (JSONL/gzip, Hive `load_date=` partition, nesting kept
   inline, absent-means-null). Runs via `.github/workflows/ingest-bronze.yml`; guarded on PRs by
-  `ingest-check.yml`. **Built + locally verified, not yet applied or pushed.**
+  `ingest-check.yml`. **Live — first successful S3 load 2026-08-01, run `30713843583`.**
 - `docs/` knowledge base scaffolded: ADR system, SLOs + error budget, runbooks, retros.
 - ADRs **0001** (record decisions) and **0002** (Postgres + JSONB) written and Accepted.
 - ADRs **0003** (S3 + Parquet Medallion lake), **0004** (DuckDB engine), **0007** (GitHub Actions +
@@ -283,55 +283,12 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ NOT a clean boundary: the FPL→Bronze slice is built and
-> locally verified, but UNCOMMITTED and UNAPPLIED.** Nothing is broken and nothing is live; the
-> work simply exists only in this working tree. Four steps, in order — 1 and 2 are independent
-> of each other, but 3 needs both.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** FPL→Bronze is committed (`d701cbe`, with the
+> em-dash fix in `0a3c547`), applied, and proven live in S3. Working tree clean, CI green,
+> nothing half-finished.
 >
-> **1. Commit + push — via GitHub Desktop.** The bundle adds `.github/workflows/`, and the CLI
-> HTTPS token lacks the `workflow` scope. New: `ingest/**` (9 files), `infra/iam_ingest.tf`,
-> `.github/workflows/ingest-bronze.yml`, `.github/workflows/ingest-check.yml`. Modified:
-> `infra/iam_oidc.tf`, `infra/outputs.tf`, `.gitignore`, `docs/STATUS.md`, `docs/backlog.md`.
-> Suggested message: `feat(ingest): Wk2 — FPL→Bronze dlt pipeline + runtime ingest role`
-> *(`ingest-check.yml` is path-filtered to `ingest/**`, so it runs on this push; `gitleaks` and
-> `terraform-check` run too. Expect three green workflows.)*
->
-> **2. `terraform apply`** (Stephen runs this). Expect roughly **3 added, 1 changed, 1
-> destroyed**, all IAM and all free:
-> ```
-> cd infra
-> export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
-> export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
-> export TF_VAR_budget_notification_email='<the address B2 already uses>'
-> terraform plan     # sanity-check the destroy below before applying
-> terraform apply
-> ```
-> ⚠️ The **destroy is expected and safe**: `aws_iam_role_policy.lake_rw` is replaced by
-> `lake_markers`, which narrows `tf-apply` from whole-lake read/write down to the three `.keep`
-> objects Terraform authors. Nothing consumes the old grant — the dlt jobs use the new
-> `pitch-control-ingest` role. All four `TF_VAR`s must be exported **in the same shell** as the
-> apply (they don't survive between commands run separately).
->
-> **3. Set two repo variables** (Settings → Secrets and variables → Actions → Variables), the
-> same pattern as the existing OIDC vars:
-> ```
-> AWS_INGEST_ROLE_ARN        = $(terraform output -raw ingest_role_arn)
-> PITCH_CONTROL_LAKE_BUCKET  = pitch-control-lake-749614773761
-> ```
-> The workflow **hard-fails if `PITCH_CONTROL_LAKE_BUCKET` is unset** rather than silently
-> writing Bronze to a runner's disk and reporting success.
->
-> **4. Dispatch the workflow manually** (Actions → ingest-bronze → Run workflow, leave backfill
-> blank) instead of waiting for 06:00. This is the **first real proof of the OIDC→S3 write
-> path**; everything before it was verified against local disk. Then confirm the objects landed:
-> ```
-> aws s3 ls s3://pitch-control-lake-749614773761/bronze/fpl/ --recursive | head
-> ```
-> Expect **9 prefixes and zero `event_live` rows** — pre-season, which is a correct no-op, not a
-> failure (see *Current phase*).
->
-> **Then: the second half of Wk 2 — Postgres→S3.** This is where the deferred machinery lands,
-> and it is a bigger step than the FPL half:
+> **The next move is the second half of Wk 2 — Postgres→S3.** This is where the deferred
+> machinery lands, and it is a materially bigger step than the FPL half was:
 > - **ADR-0021 ephemeral SG ingress** — authorize the runner's /32 on 5432, run, revoke via
 >   `if: always()`, plus a start-of-run sweep and a scheduled janitor.
 >   **[`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md) prescribes the stamping
@@ -346,6 +303,22 @@ delegable: **B6** (remote state, post-apply only).
 >   comment in [`infra/iam_ingest.tf`](../infra/iam_ingest.tf) lists them precisely.
 > - The RDS CA bundle is **gitignored** (`*.pem`), so the workflow must `curl` it for
 >   `verify-full` — it cannot read it from the repo.
+> - **What to reuse:** the FPL job is the working template for OIDC + destination wiring, and
+>   `run_fpl.py`'s `PITCH_CONTROL_LAKE_BUCKET` switch (set = S3, unset = local dry run) is worth
+>   copying — it is what let the whole pipeline be validated with zero AWS calls. dlt has a
+>   first-class `sql_database` source, so the extract side is mostly configuration; the genuinely
+>   new work is the SG dance, the janitor, and the secret fetch.
+> - **Bronze contract for the new source:** same shape as FPL —
+>   `bronze/postgres/<table>/load_date=.../*.jsonl.gz`, append-only, `max_table_nesting=0`.
+>   Reasoning in [`ingest/README.md`](../ingest/README.md).
+>
+> 📌 **Committing: use the Terminal, push via Desktop.** GitHub Desktop's hook runner fails on
+> this machine — `Bad CPU type in executable` when it execs its temp copy of the pre-commit hook.
+> Diagnosed 2026-08-01 and **it is not a local misconfiguration**: the Mac, Desktop, Desktop's
+> bundled git and the hook are all x86_64, and the hook runs clean standalone. It is a Desktop
+> bug. This costs nothing because the documented workflow already says commit from the Terminal
+> (so `gitleaks` actually runs) and use Desktop only for pushes that touch `.github/workflows/`
+> (the CLI token lacks `workflow` scope).
 >
 > *(Housekeeping ✅ done 2026-08-01: the post-migration leftovers `infra/terraform.tfstate` +
 > `terraform.tfstate.backup` are deleted — both held the RDS password in plaintext. Neither was a
@@ -460,8 +433,9 @@ Skills being practiced deliberately, not just the app output:
 
 - [x] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema. **Infra applied + verified 2026-07-14.** PostHog SDK is app-layer (arrives with the Wk-2+ app), still TODO.
 - [ ] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
-  **FPL→S3 built + locally verified 2026-08-01** (uncommitted/unapplied — see *Immediate next
-  actions*); **Postgres→S3 not started** (needs ADR-0021 ephemeral SG + ADR-0019 SSM secret).
+  **FPL→S3 shipped 2026-08-01** — applied, scheduled daily 06:00 UTC, first live S3 load
+  verified (run `30713843583`); **Postgres→S3 not started** (needs ADR-0021 ephemeral SG +
+  ADR-0019 SSM secret).
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
