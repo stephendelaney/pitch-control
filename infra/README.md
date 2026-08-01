@@ -20,8 +20,12 @@ reproducible from zero (ADR-0009).
 
 ## Decisions baked in (Wk 1)
 
-- **Local state**, not S3 — a deliberate, temporary deviation from ADR-0009. See `backend.tf`;
-  reconciled in Wk 5 when CI/OIDC deploys land.
+- **Remote state in S3** (B6, 2026-08-01) — ADR-0009's remote backend, **pulled forward from Wk 5**
+  now that the first `apply` has happened. `tfstate.tf` stands up the bucket (versioned, encrypted,
+  TLS-only, `prevent_destroy`); `backend.tf` points at it with `use_lockfile = true` (S3-native
+  locking — no DynamoDB table, and nothing to pay for). See
+  [Remote state (B6)](#remote-state-b6) for the migration and the teardown caveat.
+  The Wk-1 local-state deviation is **closed**.
 - **Default VPC, public RDS, IP-locked SG** — simplest reachable Postgres for local dev/dbt. A
   dedicated private-subnet VPC is a later upgrade.
 - **$0 posture** — free-tier instance (`db.t4g.micro`) + `gp2` storage (the documented free-tier
@@ -135,16 +139,77 @@ IPs still aren't added here: per [ADR-0021](../docs/adr/0021-ci-ingest-network-p
 ingest job opens its own transient /32 ingress at run time and revokes it after — it doesn't rely on
 a standing SG hole.)
 
+## Remote state (B6)
+
+State moved from the laptop to S3 on **2026-08-01**. The motive is blunt: the state file is the
+*map* to 20 live AWS resources. Losing it doesn't delete them — it strands them, to be re-imported
+by hand or paid for silently.
+
+**Why the bucket is defined in this same config** (`tfstate.tf`) rather than a separate bootstrap
+stack: it's one bucket, and a second config means a second state file with the same problem one
+level down. The chicken-and-egg is resolved by *ordering* instead — create it while the backend is
+still local, then migrate:
+
+```bash
+cd infra
+# STEP 1 — with backend.tf still on `backend "local"`: create the bucket.
+export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
+export TF_VAR_budget_notification_email="…"
+export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
+terraform apply        # adds the state bucket + 2 IAM role policies; touches nothing existing
+
+# STEP 2 — flip backend.tf to the `backend "s3"` block, then migrate the existing state up.
+terraform init -migrate-state   # answer "yes" when it offers to copy local state to S3
+
+# STEP 3 — verify, then retire the local copy.
+terraform plan         # must report "No changes" — proves the migrated state matches reality
+aws s3 ls "s3://$(terraform output -raw tfstate_bucket)/infra/"
+mv terraform.tfstate terraform.tfstate.premigration.bak   # keep briefly, then delete
+```
+
+> ⚠️ **The state file contains `db_password` in plaintext.** `sensitive = true` redacts CLI output,
+> not state. That's true of the local file too — but it's why the bucket is private + TLS-only, why
+> the CI grants are scoped to a single object key, and why the leftover local `.tfstate` /
+> `.tfstate.backup` files should be deleted once the migration is verified. They're gitignored
+> (`*.tfstate`), so they were never a *commit* risk — only a laptop-disk one.
+
+### Teardown — read before `terraform destroy`
+
+`prevent_destroy = true` on the state bucket means a bare `terraform destroy` now **fails at plan
+time**. That's deliberate (it's the backend the destroy is running against), but it changes the
+month-6 exit / long-pause procedure documented in [`docs/STATUS.md`](../docs/STATUS.md):
+
+```bash
+cd infra
+# 1. Destroy everything EXCEPT the state bucket + its attachments.
+terraform destroy \
+  -target=aws_db_instance.postgres \
+  -target=aws_s3_bucket.lake \
+  …                                    # or drop prevent_destroy in tfstate.tf first
+# 2. Bring state back down to local so the bucket isn't hosting its own execution.
+#    (flip backend.tf back to `backend "local"`, then:)
+terraform init -migrate-state
+# 3. Now the bucket can go.
+aws s3 rm "s3://pitch-control-tfstate-<account-id>" --recursive
+aws s3api delete-bucket --bucket "pitch-control-tfstate-<account-id>"
+```
+
+Simplest alternative if you're tearing down for good: delete the `lifecycle` block from
+`tfstate.tf`, `terraform apply`, then `terraform destroy` — and expect the state-bucket delete to
+be the last thing that happens, with the final state write going nowhere. Either way, **empty the
+bucket first** (versioned buckets refuse deletion while any version remains).
+
 ## Outputs
 
-`lake_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and the two OIDC role ARNs —
+`lake_bucket`, `tfstate_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and the two OIDC role ARNs —
 `tf_plan_role_arn` and `tf_apply_role_arn` (ADR-0020 split). Set them as the `AWS_TF_PLAN_ROLE_ARN`
 and `AWS_TF_APPLY_ROLE_ARN` repo variables for Actions in Wk 2+: PR `plan` assumes tf-plan
 (read-only, any ref); `main` `apply` + the dlt lake write assume tf-apply (write, main-pinned).
 
 ## Not here yet (by design)
 
-- Remote S3 state + locking → Wk 5.
+- ~~Remote S3 state + locking → Wk 5.~~ **Done 2026-08-01 (B6)** — see
+  [Remote state (B6)](#remote-state-b6).
 - Lambda functions and their **reserved-concurrency caps** (ADR-0002 amendment) → arrive with the
   API (ADR-0015) and dlt read path (ADR-0010); no Lambdas exist in Wk 1.
 - Broader Terraform-deploy IAM policy for CI `apply` → Wk 5; the role currently grants only

@@ -1,9 +1,46 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-07-16**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-01**.
 
 ## Current phase
+
+**B6 DONE — state lives in S3; Wk 1 is fully closed. Wk 2 is the next move (2026-08-01).**
+**`infra/tfstate.tf`** applied cleanly (**8 added, 0 changed, 0 destroyed**) — S3 state bucket
+`pitch-control-tfstate-749614773761`, versioned, SSE-S3, TLS-only deny policy, `prevent_destroy`,
+365-day noncurrent retention — plus the two CI state grants. `backend.tf` is now `backend "s3"` with
+`use_lockfile = true` (S3-native locking — no DynamoDB, still $0), and
+**`terraform init -migrate-state` succeeded: the follow-up `terraform plan` reports "No changes"**,
+which is the proof the migrated state matches live reality. The Wk-1 local-state deviation from
+ADR-0009 is **closed**; 28 resources are no longer hostage to one laptop. **⚠️ Still uncommitted —
+see next actions.**
+
+The two-step ordering (apply on the local backend → flip → migrate) is what resolves the
+chicken-and-egg without a second bootstrap config; it's recorded in `backend.tf` and
+`infra/README.md` → *Remote state (B6)* for whoever rebuilds this from nothing.
+
+**Two prerequisites the B6 sketch didn't anticipate, both handled:** (1) `use_lockfile` requires
+**Terraform ≥ 1.10** — `versions.tf` said `>= 1.9` and **CI pinned 1.9.8**, so both were bumped (CI
+→ `1.15.6`, matching local); a stale CI pin would have failed `init` on the next push. (2)
+**`prevent_destroy` on the state bucket makes a bare `terraform destroy` fail** — deliberate, but it
+changes the teardown lever this file recommends for the month-6 exit, so an ordered teardown
+sequence is now written into `infra/README.md`. ⚠️ The `.github/workflows/` change means this
+bundle must be **pushed via GitHub Desktop** (the CLI token lacks `workflow` scope).
+
+**🛑→▶️ RDS is running again.** It was stopped 2026-07-16 for a holiday; AWS force-starts a stopped
+instance after 7 days, so it **self-restarted ≈2026-07-23** and has been drawing instance-hours
+since — *expected, not drift*. Nothing to reconcile in Terraform (`aws_db_instance` doesn't track
+running state).
+
+**💰 FREE-PLAN DEADLINE: `2026-12-11` — ~132 days left as of today.** The **date binds, not the
+credits** (pinned in the Billing console 2026-07-16: $139.26 remaining, and at the ~$12–14/mo burn
+roughly $75 of it will expire unspent). So B9's **$15/mo gross budget is the early-warning line**;
+B2's $1 net budget stays silent until the plan actually lapses. **Month-6 exit → decide by ~Nov
+2026** (tear down / migrate to actually-free Postgres / upgrade to Paid Plan deliberately). Worth a
+fresh Billing-console glance next session — the figure above is three weeks stale and the instance
+has been running unattended since ≈07-23.
+
+<details><summary>Prior phase — Wk 1 complete + loose ends closed (2026-07-16)</summary>
 
 **Wk 1 COMPLETE + loose ends closed (2026-07-16) — Wk 2 is the next real move.** The `rds.tf`
 retention fix landed (`57eb74c`); working tree clean. This session cleared the three delegable
@@ -139,6 +176,8 @@ delegable: **B6** (remote state, post-apply only).
 
 </details>
 
+</details>
+
 ## What exists
 
 - `docs/` knowledge base scaffolded: ADR system, SLOs + error budget, runbooks, retros.
@@ -182,26 +221,27 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE (clean boundary):** **Wk 1 is applied + verified and its loose ends
-> are closed.** Everything from 2026-07-16 is **committed + pushed; working tree clean** (`b9ce694`
-> = the three delegable items, `2164585` = the repo-variable status update). **B6 is the only open
-> item — start there, then Wk 2.**
+> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ NOT a clean boundary: B6 is applied but UNCOMMITTED.** The
+> infrastructure change is done and verified; the code describing it is still only in the working
+> tree. **Land it first, before anything else** — if this tree is lost, live AWS resources have no
+> committed source. Two steps:
 >
-> 1. ~~**Commit this session's three delegable items**~~ — **✅ DONE 2026-07-16** (`b9ce694`, pushed
->    via GitHub Desktop as it touched `.github/workflows/`). **CI green and the bumps are verified**
->    (run `29494537600` resolved `checkout@v7` + `setup-terraform@v4`; Node 20 warnings gone).
+> 1. **Commit + push — via GitHub Desktop.** The bundle touches `.github/workflows/`
+>    (`terraform_version` 1.9.8 → 1.15.6, forced by the `use_lockfile` ≥1.10 floor), and the CLI
+>    HTTPS token lacks the `workflow` scope. Files: `infra/tfstate.tf` (new), `infra/backend.tf`,
+>    `infra/versions.tf`, `infra/outputs.tf`, `infra/README.md`,
+>    `.github/workflows/terraform-check.yml`, `docs/STATUS.md`, `docs/backlog.md`. Suggested message:
+>    `feat(infra): B6 — remote S3 state w/ native locking; TF floor >=1.10`
 >
-> 2. ~~**Set the two OIDC repo variables**~~ — **✅ DONE 2026-07-16**, verified against live IAM:
->    `AWS_TF_PLAN_ROLE_ARN` + `AWS_TF_APPLY_ROLE_ARN` are set as **repo variables** (not secrets —
->    role ARNs aren't secret and are already published in this repo). Wk 2's hard gate is cleared;
->    the ingest workflow can `role-to-assume: ${{ vars.AWS_TF_PLAN_ROLE_ARN }}` etc.
->    **NB — deviation from CLAUDE.md:** the house rule says the maintainer runs all repo/GitHub
->    actions; Stephen explicitly directed this one in-session ("set the repo variables now before I
->    forget"). Reversible via `gh variable delete <NAME> -R stephendelaney/pitch-control`.
+> 2. **Confirm CI is green** on the new TF pin — job 1 runs `init -backend=false`, so it never
+>    touches the state bucket, but it *will* enforce `required_version >= 1.10`. This is the one
+>    thing that could bite: if the pin and the floor disagree, `init` fails.
 >
-> 3. **(recommended, now unblocked) B6 — migrate state to S3.** 20 live resources are tracked only
->    in local state on one laptop; the deferral's precondition ("after first apply") is met. Small:
->    add the state bucket + flip `backend.tf`, then Stephen runs `terraform init -migrate-state`.
+> *(Housekeeping ✅ done 2026-08-01: the post-migration leftovers `infra/terraform.tfstate` +
+> `terraform.tfstate.backup` are deleted — both held the RDS password in plaintext. Neither was a
+> commit risk: `.gitignore` covers them via `*.tfstate` **and** `*.tfstate.*` — note the second
+> pattern is what catches `.backup`, since `*.tfstate` alone would not. Rollback is now S3 object
+> versioning on the state bucket.)*
 >
 > **Then start Wk 2 — Bronze ingestion (`dlt`).** FPL→S3 + Postgres→S3 on a GitHub Actions
 > schedule, using ADR-0021's ephemeral-SG ingress (runner /32 opened at run, revoked via
@@ -220,8 +260,10 @@ delegable: **B6** (remote state, post-apply only).
 > bundle (`infra/README.md` → Connecting). SG is IP-locked — if your IP rotates, re-run the
 > `allowed_cidrs` export + `terraform apply` (README "My IP changed"). **Teardown** when done for
 > a while (stops credit drawdown): `terraform destroy` (deletion_protection off, skip_final_snapshot
-> on — clean). **Free-plan hard stop: `2026-12-11`** — plan the exit by ~Nov 2026 (see *Current
-> phase*). B6 (remote state) is pulled forward to now; CI action bumps done 2026-07-16.
+> on — clean) — **⚠️ but once B6 is applied this no longer works bare:** `prevent_destroy` on the
+> state bucket fails the plan, so follow the ordered sequence in `infra/README.md` → *Teardown*
+> (destroy everything else → migrate state back to local → empty + delete the bucket).
+> **Free-plan hard stop: `2026-12-11`** — plan the exit by ~Nov 2026 (see *Current phase*).
 >
 > <details><summary>Prior next-actions (pre-apply, 2026-07-11) — history</summary>
 >

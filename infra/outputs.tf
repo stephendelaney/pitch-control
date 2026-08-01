@@ -8,6 +8,11 @@ output "lake_bucket_arn" {
   value       = aws_s3_bucket.lake.arn
 }
 
+output "tfstate_bucket" {
+  description = "Remote Terraform state bucket (B6). Referenced by the `backend \"s3\"` block in backend.tf."
+  value       = aws_s3_bucket.tfstate.bucket
+}
+
 output "rds_endpoint" {
   description = "Postgres connection endpoint (host:port)."
   value       = aws_db_instance.postgres.endpoint

@@ -143,13 +143,36 @@ Apache-2.0), `detect --redact --exit-code 1`. This closes ADR-0022 layer 3's CI 
 push-protection toggle is still Stephen's manual step). Validated locally: `fmt -check` + `validate`
 clean; gitleaks asset URL returns 200; YAML parses. Not yet exercised on a live PR (no push yet).
 
-### B6. Pull remote Terraform state forward (from Wk 5 to right-after-first-apply)
+### B6. Pull remote Terraform state forward (from Wk 5 to right-after-first-apply) — ✅ DONE 2026-08-01
 
 Local state on one laptop orphans live AWS resources if the laptop dies. The deferred
 bootstrap is tiny: one S3 state bucket + `backend "s3"` with `use_lockfile = true` (already
 sketched in `infra/backend.tf`). Do it immediately after the first successful `apply`
 (Stephen runs the migrate: `terraform init -migrate-state`). **Done when:** state lives in
 S3; `backend.tf` comment updated; ADR-0009 deviation note in STATUS closed.
+
+**Outcome (code, 2026-08-01):** new `infra/tfstate.tf` — bucket `${project}-tfstate-<account-id>`
+with versioning **Enabled** (the only recovery path from a bad state write), SSE-S3,
+public-access block, a `DenyInsecureTransport` policy mirroring B4, noncurrent-version expiry at
+**365 days** (vs the lake's 30 — old state versions *are* the rollback), and
+`lifecycle { prevent_destroy = true }`. Plus the CI grants the backend needs: `tf-plan` gets
+read on the state key and **write on `<key>.tflock` only** (a read-only `plan` still acquires a
+lock — the subtlety that would otherwise bite at the first CI `plan`), `tf-apply` gets read/write
+on both. `backend.tf` now carries the ready-to-uncomment `backend "s3"` block + the two-step
+ordering; `outputs.tf` exposes `tfstate_bucket`; `infra/README.md` gains a "Remote state (B6)"
+section. `fmt`+`validate` clean.
+
+**Applied + migrated 2026-08-01:** `terraform apply` → **8 added, 0 changed, 0 destroyed**;
+`backend.tf` flipped to `backend "s3"`; `terraform init -migrate-state` copied state up, and the
+verification `terraform plan` reported **"No changes"** — S3 state matches live reality. Local
+`terraform.tfstate`/`.backup` retired. **All three done-when criteria met**, and the ADR-0009
+local-state deviation is closed.
+
+**Two prerequisites the original sketch missed:** (1) `use_lockfile` needs **Terraform >= 1.10** —
+`versions.tf` was `>= 1.9` and CI pinned **1.9.8**, so both were bumped (CI → 1.15.6, matching
+local); (2) `prevent_destroy` makes a bare `terraform destroy` **fail**, which changes the
+month-6-exit teardown lever STATUS documents — the ordered teardown sequence is now written into
+`infra/README.md`.
 
 ### B7. Doc fix: psql example in `infra/sql/0001_init.sql` — ✅ DONE 2026-07-04
 

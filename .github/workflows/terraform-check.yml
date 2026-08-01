@@ -31,7 +31,9 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: "1.9.8"
+          # Matches the maintainer's local Terraform. Must stay >= 1.10 — versions.tf sets
+          # that floor for the S3 backend's `use_lockfile` (B6), and 1.9.x now fails init.
+          terraform_version: "1.15.6"
 
       # fmt across the whole tree (recursive) so nested dirs (e.g. sql/) are covered.
       - name: terraform fmt -check
