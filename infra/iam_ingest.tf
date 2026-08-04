@@ -111,10 +111,22 @@ data "aws_iam_policy_document" "ingest_sg_ephemeral" {
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:RevokeSecurityGroupIngress",
     ]
-    # The one SG this project has. Constructed rather than read from a data source so the
-    # scope is legible at a glance: this role cannot touch any other security group.
+    # BOTH resource types are required, and the second one is not obvious — omitting it fails
+    # with `UnauthorizedOperation ... on resource: .../security-group-rule/*` even though the
+    # call names only a group id (observed on run 30943352666, 2026-08-04).
+    #
+    # These calls act on two resources at once: the group, and the individual rule rows they
+    # create or delete inside it. Authorize-with-tags reports the rule it created, and Revoke
+    # takes rule ids — so both touch rule ARNs that cannot be known when the policy is written,
+    # hence the wildcard.
+    #
+    # The wildcard does not widen the blast radius. IAM requires *every* resource in a request
+    # to be permitted, and the group ARN below is a single specific group — so a call aimed at
+    # any other security group still fails on the group check. The rule wildcard only says
+    # "whichever rules belong to that one permitted group".
     resources = [
       "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:security-group/${aws_security_group.rds.id}",
+      "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:security-group-rule/*",
     ]
   }
 

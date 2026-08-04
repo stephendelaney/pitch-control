@@ -12,3 +12,10 @@ dlt[filesystem,sql_database]==1.29.1
 # critical path. The known caveat (its bundled libssl can clash inside another C extension's
 # process) does not apply — this runs as a standalone script, not embedded in one.
 psycopg2-binary==2.9.10
+
+# Lets dlt collect memory stats instead of warning that it cannot. Not cosmetic: the seed
+# schema's `ops.pipeline_runs.peak_mem_mb` and the ADR-0007 amendment's Fargate-overflow
+# trip-wire (step duration + memory against the 15-min Lambda cap) both need this number, and
+# Wk 3 is when the jobs start writing that row. Cheaper to have it before it is needed than to
+# discover the column is unfillable.
+psutil==7.1.3

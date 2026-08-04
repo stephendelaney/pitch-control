@@ -5,20 +5,51 @@
 
 ## Current phase
 
-**Wk 2 CODE COMPLETE — Postgres→Bronze is built, tested and proven against the live RDS
-instance; it is NOT yet applied, committed or pushed (2026-08-04).** Both halves of Wk 2 now
-exist in the tree. The FPL half has been live in S3 since 2026-08-01; this session built the
-second half — the one that needed ADR-0021's ephemeral security-group ingress and ADR-0019's
-SSM secret path, which is why it was taken second.
+**✅ Wk 2 COMPLETE — both Bronze pipelines are LIVE in S3 (2026-08-04).** FPL→Bronze has run
+daily since 2026-08-01; Postgres→Bronze shipped this session, merged as PR #2 (`2a6b11d`,
+commit `9378bf2`) and **proven live on run
+[`30943706203`](https://github.com/stephendelaney/pitch-control/actions/runs/30943706203)** —
+the full ADR-0021 + ADR-0019 path in one pass:
 
-**⚠️ Three Stephen-run steps stand between here and "live" — see *Immediate next actions*.**
-The working tree is dirty and nothing has been applied. This is the one place in the project's
-history where the code is finished but the infrastructure has not caught up, so read the next
-actions before assuming anything is running.
+```
+opening 172.184.254.71/32 on 5432/tcp of sg-0bdc782c110aa0ba0   → sgr-006434120482a6428
+RDS endpoint resolved from the instance identifier (not a repo var)
+source: ***…/pitchcontrol (sslmode=verify-full)   password masked in the log
+schema app: 1 table(s) — app_raw_landing
+schema ops: 1 table(s) — ops_pipeline_runs
+destination: s3://pitch-control-lake-749614773761/bronze   LOADED, no failed jobs
+revoking sgr-006434120482a6428 … revoked
+```
 
-**Proven, not just built.** The pipeline was run end-to-end against the real instance
-(`pitch-control-pg`) over TLS `verify-full` from this machine, writing to local disk rather
-than the lake:
+**Zero data rows, and that is the correct outcome** — the app layer does not exist yet, so both
+tables are empty; only `_dlt_pipeline_state` was written. The run proves the *path*, not the
+data. The SG was independently queried afterwards and holds exactly one rule (the home /32), so
+the `always()` revoke — not the janitor, which had not yet run — is what closed it.
+
+**🔑 Gotcha banked (cost the first live run, `30943352666`): `ec2:AuthorizeSecurityGroupIngress`
+needs `security-group-rule/*` in `Resource`, not just the security group.** Tagging a rule at
+creation makes AWS evaluate the *Authorize* action against both the group **and** the rule
+resource, so a policy scoped to the group alone fails with
+`UnauthorizedOperation … on resource: …:security-group-rule/*` even though the call names only
+a group id. `RevokeSecurityGroupIngress` (which takes rule ids) would have hit the same wall on
+the next run. Granting `CreateTags` on the rule ARN is **not** sufficient — the Authorize action
+itself needs it. This does **not** widen the blast radius: IAM requires every resource in a
+request to be permitted, and the group ARN is still a single specific group, so a call aimed at
+any other SG still fails on the group check.
+
+**The verification lesson, worth more than the fix.** The pre-apply check used
+`aws ec2 authorize-security-group-ingress --dry-run` as the **admin IAM user**, which proved the
+request was well-formed and said nothing about whether the *role* could make it. For any future
+role-scoped change, simulate against the actual principal instead:
+`aws iam simulate-principal-policy --policy-source-arn <role-arn> --action-names … --resource-arns …`.
+
+**The design held; only the IAM was wrong.** The failed run failed *closed* — the sweep ran,
+`open` errored before creating anything, and the `always()` revoke correctly found nothing to
+do. No orphaned rule, no exposure. That is the behaviour the three cleanup layers were built
+for, exercised for real on day one.
+
+**Also proven earlier, against the live instance from the maintainer's Mac** (local destination,
+before any commit):
 - **Path contract holds** — `bronze/postgres/<schema>_<table>/load_date=2026-08-04/*.jsonl.gz`.
 - **JSONB survives intact.** A three-level-deep `payload` (nested objects, arrays, inner
   `null`s) landed as **one column, no child tables** — the thing `max_table_nesting=0` exists
@@ -58,9 +89,10 @@ missing *key inside a payload* — there, absence is meaningful.
   window when ingest is paused or broken. It logs an `::warning::` per orphan: a janitor that
   regularly finds work is reporting a bug in the revoke path.
 - **`infra/iam_ingest.tf`** — three new narrow grants on `pitch-control-ingest` (never
-  `tf-apply`): SG authorize/revoke **scoped to the one SG** + `CreateTags` gated on
-  `ec2:CreateAction`; `ssm:GetParameter` on one parameter + `kms:Decrypt` gated on
-  `kms:ViaService`; `rds:DescribeDBInstances` on the one instance.
+  `tf-apply`): SG authorize/revoke **scoped to the one SG plus `security-group-rule/*`** (see
+  the gotcha above — both are required) + `CreateTags` gated on `ec2:CreateAction`;
+  `ssm:GetParameter` on one parameter + `kms:Decrypt` gated on `kms:ViaService`;
+  `rds:DescribeDBInstances` on the one instance.
 
 **Two decisions worth knowing before touching this again:**
 1. **The SSM parameter is deliberately *not* a Terraform resource.** Terraform grants the
@@ -321,7 +353,7 @@ delegable: **B6** (remote state, post-apply only).
   inline, and the split null rule). Both run via `.github/workflows/ingest-bronze.yml` as
   independent jobs; guarded on PRs by `ingest-check.yml`.
   - **FPL→S3 — live**, first successful S3 load 2026-08-01, run `30713843583`.
-  - **Postgres→S3 — built + locally proven 2026-08-04, not yet applied or pushed.**
+  - **Postgres→S3 — live**, first successful S3 load 2026-08-04, run `30943706203`.
 - **`.github/scripts/sg-ephemeral.sh`** — ADR-0021's ephemeral SG ingress (`open`/`close`/
   `sweep`), shared by the ingest workflow and `sg-janitor.yml` so the stamping convention has
   exactly one definition. The failure mode it exists for is documented in
@@ -368,95 +400,58 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary, but the tree is dirty.** Postgres→Bronze is
-> written, tested (39 green) and proven against the live database; **nothing is applied,
-> committed or pushed.** No half-finished edits — the boundary is "code done, infra not yet".
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Wk 2 is complete and live: both Bronze
+> pipelines are merged to `main` (`2a6b11d`), applied, and proven by run `30943706203`. CI is
+> green. **One loose end:** the `security-group-rule/*` IAM fix and this status update are
+> applied but **not yet committed** — see step 0 below.
 >
-> **Three steps, in this order. The order matters: step 2 must precede step 3, or the first
-> scheduled run fails with `ParameterNotFound`.**
->
-> **1 — Review, then commit + push.** Commit from the **Terminal** (so `gitleaks` runs) and push
-> via **GitHub Desktop** (`.github/workflows/` is touched, and the CLI token lacks `workflow`
-> scope). `pre-commit run --files …` was already run green over every new and modified file —
-> note `--all-files` would **not** have covered them, since it only sees tracked files.
+> **0 — Commit the tail of Wk 2.** Terraform-only plus docs, so `git push` works from the CLI
+> (no `.github/` changes, so GitHub Desktop is not needed this time):
 >
 > ```bash
 > cd ~/Documents/GitHub/just-for-fun
-> git switch -c wk2-postgres-bronze     # PR gets ingest-check + terraform-check before merge
-> git add ingest .github infra docs
-> git commit    # then push via GitHub Desktop
+> git add infra docs ingest
+> git commit    # then: git push
 > ```
 >
-> Straight to `main` also works (both check workflows also run on push→main) and matches recent
-> practice — but **the ingest and `tf-apply` OIDC roles are pinned to `main`**, so the dispatch
-> in the last step only works once this is on `main`. Merge first, then dispatch.
+> **The next real move is Wk 3 — Silver/Gold with dbt-duckdb.** Four things to carry into it:
 >
-> **2 — Seed the SSM secret** (ADR-0019; full block + a verify step in `infra/README.md` →
-> *Seeding the runtime DB secret*). Do this **before** the apply is exercised by a real run:
+> 1. **Bronze holds FPL data only.** Both pipelines run, but Postgres loads 0 rows because the
+>    app layer does not exist yet. The first Silver models have exactly one real source —
+>    `bronze/fpl/` — and `bronze/postgres/` is a working pipe waiting for an app.
+> 2. **The split null rule** (see *Current phase*): a missing **column** means null; a missing
+>    **key inside a JSONB payload** does not. Getting this backwards is a silent data bug, not
+>    a failure, so encode it in a dbt test rather than a comment.
+> 3. **`ops.pipeline_runs` is still empty** — nothing writes to it yet. ADR-0012's SLIs and
+>    ADR-0007's Fargate-overflow trip-wire both read from it, so Wk 3 is when the ingest jobs
+>    should start writing a row per run. Note dlt warned that **`psutil` is not installed**, so
+>    memory stats are unavailable — `peak_mem_mb` in the seed schema needs it. One line in
+>    `ingest/requirements.txt`.
+> 4. **Read the Bronze contract before modelling**, in [`ingest/README.md`](../ingest/README.md):
+>    JSONL/gzip, Hive `load_date=` partition, nesting kept inline, schema-qualified table names
+>    on the Postgres side, `_dlt_load_id` as the "which run produced this" key.
+>
+> **Watch for the first janitor run.** `sg-janitor.yml` fires daily at 07:00 UTC and should
+> find nothing. If it ever logs an `::warning::`, that is a real signal — the `always()` revoke
+> failed somewhere, and [`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md) is the
+> response.
+>
+> **Verifying the SG by hand** (the check `terraform plan` cannot do — a rule Terraform never
+> created is invisible to it, since `network.tf` uses discrete
+> `aws_vpc_security_group_ingress_rule` resources):
 >
 > ```bash
-> cd infra
-> export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
-> aws ssm put-parameter --name /pitch-control/dev/rds/password \
->   --type SecureString --overwrite --value "$TF_VAR_db_password"
-> ```
->
-> **3 — `terraform apply`.** **Plan verified 2026-08-04** (read-only, `-lock=false`):
->
-> ```
-> Plan: 3 to add, 0 to change, 0 to destroy.
-> Changes to Outputs:
->   + rds_password_ssm_parameter = "/pitch-control/dev/rds/password"
->   + rds_security_group_id      = "sg-0bdc782c110aa0ba0"
-> ```
->
-> The three adds are all inline `aws_iam_role_policy` resources on `pitch-control-ingest`:
-> `-ingest-sg-ephemeral`, `-ingest-rds-secret`, `-ingest-rds-describe`. **Zero changes to RDS,
-> the lake, the SG, or the deploy roles.** Anything else is a surprise worth stopping for —
-> with one expected exception: that plan was run with `allowed_cidrs` pinned to the value in
-> state (`64.98.121.96/32`). If your IP has rotated since, you will also see the SG ingress rule
-> replace, which is the normal "My IP changed" path, not drift from this work.
->
-> `apply` needs all three no-default vars:
->
-> ```bash
-> cd infra
-> export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
-> export TF_VAR_budget_notification_email="…"          # your address
-> export TF_VAR_allowed_cidrs='["'"$(curl -s https://checkip.amazonaws.com)"'/32"]'
-> terraform plan     # confirm against the block above
-> terraform apply
-> ```
->
-> (Chain the exports with `&&` or run them in one shell — they do not survive between separate
-> tool invocations.)
->
-> **Then prove it live**, exactly as the FPL half was proven — dispatch the workflow and watch
-> the SG open and close:
->
-> ```bash
-> gh workflow run ingest-bronze.yml -R stephendelaney/pitch-control
-> # after it finishes, the SG must be back to just your home /32:
 > aws ec2 describe-security-group-rules \
 >   --filters "Name=group-id,Values=sg-0bdc782c110aa0ba0" \
 >   --query 'SecurityGroupRules[?!IsEgress].{cidr:CidrIpv4,desc:Description}' --output table
 > ```
 >
-> **What to expect from that first run:** `app_raw_landing` and `ops_pipeline_runs` both load
-> **0 rows**, and that is success — the app layer does not exist yet, so nothing writes to those
-> tables. The run proves the *path*: OIDC → SG open → SSM fetch → TLS `verify-full` → S3 write →
-> revoke. It will not write any data files to S3 until there is data.
+> Expect exactly one row: the home /32, "Postgres from allowed CIDR".
 >
-> ⚠️ **A clean `terraform plan` is not proof the SG was cleaned up.** `network.tf` manages
-> ingress as discrete `aws_vpc_security_group_ingress_rule` resources, so a rule Terraform never
-> created is invisible to it. The `describe-security-group-rules` query above is the check that
-> counts — same reasoning as
-> [`runbooks/orphaned-sg-rule.md`](runbooks/orphaned-sg-rule.md).
->
-> **After that, Wk 2 is done and Wk 3 (Silver/Gold with dbt-duckdb) is the next real move.**
-> Two things to carry into it: the **split null rule** (missing column = null; missing key
-> inside a JSONB payload ≠ null — see *Current phase*), and the fact that Bronze currently holds
-> **FPL data only**, so the first Silver models have exactly one real source to work from.
+> 💡 **For the next role-scoped IAM change, simulate against the principal**, not as your admin
+> user — `aws iam simulate-principal-policy --policy-source-arn <role-arn>`. A `--dry-run` as
+> yourself proves the request is well-formed and nothing about whether the role can make it.
+> That gap cost one failed run this session.
 >
 > 📌 **Committing: use the Terminal, push via Desktop.** GitHub Desktop's hook runner fails on
 > this machine — `Bad CPU type in executable` when it execs its temp copy of the pre-commit hook.
@@ -578,11 +573,11 @@ Skills being practiced deliberately, not just the app output:
 ## Multi-week roadmap
 
 - [x] **Wk 1** — Repo + Terraform skeleton (RDS Postgres, S3 medallion, IAM/OIDC); seed schema. **Infra applied + verified 2026-07-14.** PostHog SDK is app-layer (arrives with the Wk-2+ app), still TODO.
-- [ ] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
-  **FPL→S3 shipped 2026-08-01** — applied, scheduled daily 06:00 UTC, first live S3 load
-  verified (run `30713843583`). **Postgres→S3 code complete + locally proven 2026-08-04**,
-  including ADR-0021's ephemeral SG + janitor and ADR-0019's SSM secret path — **awaiting the
-  three Stephen-run steps** in *Immediate next actions* (commit/push → seed SSM → apply).
+- [x] **Wk 2** — Bronze: `dlt` jobs (Postgres→S3, FPL→S3) on a GitHub Actions schedule.
+  **Both live, scheduled daily 06:00 UTC.** FPL→S3 shipped 2026-08-01 (run `30713843583`);
+  Postgres→S3 shipped 2026-08-04 (run `30943706203`), including ADR-0021's ephemeral SG +
+  janitor and ADR-0019's SSM secret path. Postgres loads 0 rows until the app layer exists —
+  the pipe works, the source is empty.
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
