@@ -3,6 +3,16 @@
 # how *callers* connect (reserved concurrency + handler-scoped pooling); it does not change
 # this instance. There are no Lambdas in Wk 1, so those caps land when the API/dlt arrive.
 
+# Where the runtime copy of the master password lives (ADR-0019). Defined here, next to the
+# credential it describes, because three places need to agree on the string: the IAM grant
+# (iam_ingest.tf), the seed command (infra/README.md), and the ingest workflow. Derived from
+# project + environment so it matches ADR-0019's literal `/pitch-control/dev/rds/password`.
+#
+# The value is NOT managed by Terraform — see the ADR-0019 block in iam_ingest.tf for why.
+locals {
+  rds_password_ssm_parameter = "/${var.project}/${var.environment}/rds/password"
+}
+
 resource "aws_db_subnet_group" "main" {
   name       = "${var.project}-db-subnets"
   subnet_ids = data.aws_subnets.default.ids

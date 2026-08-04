@@ -140,6 +140,72 @@ IPs still aren't added here: per [ADR-0021](../docs/adr/0021-ci-ingest-network-p
 ingest job opens its own transient /32 ingress at run time and revokes it after — it doesn't rely on
 a standing SG hole.)
 
+## Seeding the runtime DB secret (ADR-0019)
+
+The Postgres→Bronze job runs unattended and cannot read 1Password, so it reads the master
+password from an SSM **`SecureString`** using its own OIDC role. 1Password stays the source of
+truth; SSM is a copy.
+
+**The parameter is deliberately not a Terraform resource.** Terraform grants the *permission* to
+read it (`iam_ingest.tf`); the value is put there by hand. That buys two things worth more than
+the convenience: `tf-apply` never gains SSM write authority, and the secret's lifecycle is
+decoupled from an infra apply. A policy may reference a parameter that does not exist yet, so the
+order below is not load-bearing — but until you run it, the ingest job fails with
+`ParameterNotFound`.
+
+```bash
+cd infra
+export TF_VAR_db_password=$(op read "op://pitch-control/rds-master/password")
+
+aws ssm put-parameter \
+  --name "$(terraform output -raw rds_password_ssm_parameter)" \
+  --type SecureString --overwrite \
+  --value "$TF_VAR_db_password"
+
+# Verify it round-trips, without printing it.
+aws ssm get-parameter --name "$(terraform output -raw rds_password_ssm_parameter)" \
+  --with-decryption --query 'Parameter.Value' --output text \
+  | diff -q - <(printf '%s\n' "$TF_VAR_db_password") && echo "SSM matches 1Password"
+```
+
+(The value passes through `argv`, so it is briefly visible to `ps` — acceptable on a
+single-user laptop, and the reason the *ingest job* never does this: in CI the secret is
+fetched and consumed inside one step and never becomes a command-line argument.)
+
+**Re-seed, never edit SSM by hand** (ADR-0019). If the master password is ever rotated, rotate it
+in 1Password, re-run `terraform apply` (so RDS takes the new value), then re-run the seed — in
+that order. SSM holding a stale password fails the ingest job loudly, which is the good case; the
+bad case is the reverse, where SSM is right and nobody knows where the real value lives.
+
+Encryption uses the AWS-managed `alias/aws/ssm` key — free. A customer-managed key is a paid
+escalation we have not taken, and the IAM grant is scoped with `kms:ViaService` so the role's
+decrypt permission is only usable through SSM.
+
+## The ephemeral security-group dance (ADR-0021)
+
+The same job needs *network* reach, which OIDC does not grant. Rather than allowlist GitHub's
+runner ranges (equivalent to opening 5432 to the internet), the workflow opens 5432 to its own
+/32, runs, and closes it — implemented once in
+[`.github/scripts/sg-ephemeral.sh`](../.github/scripts/sg-ephemeral.sh) and used by both the
+ingest workflow and the `sg-janitor` workflow.
+
+Three layers of cleanup, because the first one has a real failure mode:
+
+| Layer | Where | Covers |
+|---|---|---|
+| `if: always()` revoke | `ingest-bronze.yml` | every outcome except a hard-killed runner |
+| start-of-run sweep | `ingest-bronze.yml` | a previous run's orphan — *if ingest runs again* |
+| scheduled janitor | `sg-janitor.yml` (07:00 UTC) | orphans while ingest is paused or broken |
+
+Rules are stamped — description `ci-ingest-ephemeral run=<run_id>` plus `ManagedBy`/`RunId`/
+`CreatedAt` tags — and the sweep only touches stamped rules, so your Terraform-managed home /32
+is never a candidate. Detection and remediation:
+[`runbooks/orphaned-sg-rule.md`](../docs/runbooks/orphaned-sg-rule.md).
+
+⚠️ **`terraform plan` cannot see an orphaned rule.** `network.tf` manages ingress as discrete
+`aws_vpc_security_group_ingress_rule` resources, so a rule Terraform never created is invisible to
+it. A clean plan is not proof of cleanup — the runbook's `describe-security-group-rules` query is.
+
 ## Remote state (B6)
 
 State moved from the laptop to S3 on **2026-08-01**. The motive is blunt: the state file is the
@@ -202,10 +268,15 @@ bucket first** (versioned buckets refuse deletion while any version remains).
 
 ## Outputs
 
-`lake_bucket`, `tfstate_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and the two OIDC role ARNs —
-`tf_plan_role_arn` and `tf_apply_role_arn` (ADR-0020 split). Set them as the `AWS_TF_PLAN_ROLE_ARN`
-and `AWS_TF_APPLY_ROLE_ARN` repo variables for Actions in Wk 2+: PR `plan` assumes tf-plan
-(read-only, any ref); `main` `apply` + the dlt lake write assume tf-apply (write, main-pinned).
+`lake_bucket`, `tfstate_bucket`, `rds_endpoint`/`rds_address`/`rds_database`, and three OIDC role ARNs —
+`tf_plan_role_arn`, `tf_apply_role_arn` (ADR-0020 split) and `ingest_role_arn` (the runtime data-plane
+identity). Set them as the `AWS_TF_PLAN_ROLE_ARN`, `AWS_TF_APPLY_ROLE_ARN` and `AWS_INGEST_ROLE_ARN`
+repo variables: PR `plan` assumes tf-plan (read-only, any ref); `main` `apply` assumes tf-apply
+(write, main-pinned); the dlt Bronze jobs assume the ingest role, which writes `bronze/*` and
+nothing else.
+
+Two more are reference values rather than wiring: `rds_password_ssm_parameter` (the ADR-0019 seed
+path — see above) and `rds_security_group_id` (what the orphaned-rule runbook queries).
 
 ## Not here yet (by design)
 
