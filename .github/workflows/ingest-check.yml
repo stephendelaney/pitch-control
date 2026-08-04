@@ -5,8 +5,10 @@
 # discovered by a failed unattended run the next morning. Same reasoning as terraform-check:
 # catch it at review time, not in production.
 #
-# No AWS credentials and no network: the tests are pure-function tests over hand-built
-# fixtures (ADR-0011 — never make the suite depend on an unofficial API being up).
+# No AWS credentials and no network. The FPL half is tested against hand-built fixtures
+# (ADR-0011 — never make the suite depend on an unofficial API being up); the Postgres half
+# reflects an in-memory SQLite database through the same SQLAlchemy path RDS uses, so it needs
+# no database server, no credential, and no open security group.
 name: ingest-check
 
 on:
@@ -14,11 +16,13 @@ on:
     branches: [main]
     paths:
       - "ingest/**"
+      - ".github/scripts/sg-ephemeral.sh"
       - ".github/workflows/ingest-check.yml"
   push:
     branches: [main]
     paths:
       - "ingest/**"
+      - ".github/scripts/sg-ephemeral.sh"
       - ".github/workflows/ingest-check.yml"
 
 permissions:
@@ -49,7 +53,17 @@ jobs:
       - name: pytest
         run: pytest -q
 
-      # Cheap import check: catches a syntax error or bad import in the pipeline modules,
-      # which the unit tests alone would not (they only import fpl.gameweeks).
+      # Cheap import check: catches a syntax error or bad import in the modules the tests do
+      # not fully exercise — `fpl.source` in particular is only reached by the scheduled run.
       - name: Import check
-        run: python -c "import run_fpl, fpl.source; print('ingest modules import cleanly')"
+        run: |
+          python -c "import run_fpl, fpl.source, run_postgres, postgres.source; \
+                     print('ingest modules import cleanly')"
+
+      # The SG script is bash, so nothing above would notice a syntax error in it — and it is
+      # the one piece of this system whose failure mode is "5432 left open", discovered at
+      # 06:00. `bash -n` is a parse-only check: it costs nothing and it cannot execute a
+      # single AWS call.
+      - name: Shell syntax check
+        working-directory: .
+        run: bash -n .github/scripts/sg-ephemeral.sh

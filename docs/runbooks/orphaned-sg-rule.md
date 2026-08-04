@@ -25,11 +25,16 @@ hard-killed runner (cancelled job, spot reclaim, OOM) skips the revoke.
     --output table
   ```
 
-> **Convention this depends on:** the ingest workflow must stamp every rule it creates with a
+> **Convention this depends on:** every rule the ingest workflow creates is stamped with a
 > description of `ci-ingest-ephemeral run=<github.run_id>` and tags
 > `ManagedBy=ci-ingest`, `RunId=<github.run_id>`, `CreatedAt=<ISO8601>`. Detection here is *by
 > that stamp* — an unstamped rule is either Stephen's home /32 (Terraform-managed, leave it) or
 > something unexplained (investigate, don't blind-revoke).
+>
+> Implemented in **[`.github/scripts/sg-ephemeral.sh`](../../.github/scripts/sg-ephemeral.sh)**
+> (`open` / `close` / `sweep`), shared by `ingest-bronze.yml` and `sg-janitor.yml` so the
+> opener and the sweeper cannot drift apart. If you change the stamp, change it there and
+> here together — nothing else enforces the agreement.
 
 ## Diagnosis
 
@@ -51,7 +56,13 @@ hard-killed runner (cancelled job, spot reclaim, OOM) skips the revoke.
 
 ## Remediation
 
-1. **Revoke the rule** (by rule id, from Detection):
+1. **Run the janitor** — it does exactly this, with the in-progress check already built in, so
+   it cannot revoke a rule a live run is using:
+   ```
+   gh workflow run sg-janitor.yml -R stephendelaney/pitch-control
+   ```
+   Fall back to a manual revoke by rule id (from Detection) only if Actions is unavailable or
+   the rule is unstamped and you have decided from Diagnosis that it should go:
    ```
    aws ec2 revoke-security-group-ingress \
      --group-id sg-0bdc782c110aa0ba0 \
@@ -72,11 +83,18 @@ hard-killed runner (cancelled job, spot reclaim, OOM) skips the revoke.
 
 ## Prevention
 
+All three are live as of 2026-08-04:
+
 - **`if: always()` revoke** on the ingest workflow — the first line of defence (ADR-0021).
+  Covers every outcome except a hard-killed runner. Note `cancel-in-progress: false` on the
+  workflow's concurrency group is part of this: cancellation is the main way a runner gets
+  hard-killed, so the platform is never allowed to create that situation on our behalf.
 - **Start-of-run sweep** — each ingest run revokes any `ci-ingest-ephemeral` rule whose `RunId` is
   not an in-progress run, before opening its own. Self-healing on the next scheduled run.
-- **Scheduled janitor** — a cron workflow running the same sweep, so cleanup does not depend on a
-  *subsequent ingest run happening*. This is what bounds the exposure window when ingest is paused.
+- **Scheduled janitor** — `sg-janitor.yml`, 07:00 UTC (an hour after ingest), running the same
+  sweep, so cleanup does not depend on a *subsequent ingest run happening*. This is what bounds
+  the exposure window when ingest is paused. **A janitor that regularly finds work is reporting a
+  bug in the revoke path** — it logs an `::warning::` per orphan for exactly that reason.
 - **Narrow IAM** — the SG grant/revoke policy is resource-scoped to this one SG and lives on the
   runtime ingest role, never `tf-apply` (ADR-0020).
 - **End-state** — the orphan class disappears when the ADR-0015 API Lambdas land in-VPC and this job

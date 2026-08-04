@@ -38,6 +38,16 @@ output "tf_apply_role_arn" {
   value       = aws_iam_role.tf_apply.arn
 }
 
+output "rds_password_ssm_parameter" {
+  description = "SSM SecureString path the ingest job reads the DB password from (ADR-0019). Seeded from 1Password, not managed by Terraform — see infra/README.md."
+  value       = local.rds_password_ssm_parameter
+}
+
+output "rds_security_group_id" {
+  description = "SG the ingest workflow opens its ephemeral /32 on (ADR-0021). The workflow resolves it by Name tag; this output is for the runbook."
+  value       = aws_security_group.rds.id
+}
+
 output "ingest_role_arn" {
   description = "Runtime OIDC role (main-pinned) for the dlt Bronze jobs; writes bronze/* only (repo var: AWS_INGEST_ROLE_ARN). ADR-0020/0021."
   value       = aws_iam_role.ingest.arn

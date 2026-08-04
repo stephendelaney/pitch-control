@@ -1,13 +1,17 @@
 # Wk 2 — Bronze ingestion (ADR-0007 orchestration, ADR-0010 dlt, ADR-0011 FPL source).
 #
-# FPL -> s3://<lake>/bronze/fpl/. This is the first job in the repo that assumes an AWS role
-# to move data rather than to manage infrastructure, so it runs as the dedicated runtime
-# ingest identity (`infra/iam_ingest.tf`, ADR-0020) — which can write bronze/* and nothing
-# else. It is deliberately NOT `tf-apply`.
+# Two independent sources, two jobs, one schedule:
 #
-# No security-group dance here: FPL is a public HTTPS endpoint, so the runner needs only
-# outbound internet and an S3 write. ADR-0021's ephemeral runner-IP ingress is required by the
-# *Postgres* -> S3 job, which lands separately and brings its own `always()` revoke + janitor.
+#   fpl       -> s3://<lake>/bronze/fpl/        public HTTPS, no secret, no network setup
+#   postgres  -> s3://<lake>/bronze/postgres/   RDS, needs ADR-0021 ingress + ADR-0019 secret
+#
+# Both assume the dedicated runtime ingest identity (`infra/iam_ingest.tf`, ADR-0020) — which
+# can write bronze/* and nothing else. Deliberately NOT `tf-apply`: these are data-plane jobs,
+# and a bug in one must not be able to reshape the account.
+#
+# The jobs are independent on purpose (no `needs:`). FPL is an unofficial third-party API
+# (ADR-0011) and RDS is our own instance; a bad afternoon for one is not a reason to skip the
+# other, and coupling them would make every FPL outage look like a database failure.
 #
 # Cost: $0. Actions minutes are unmetered on public repos, and the load is a few MB of S3
 # PUTs a day — immaterial against the free-plan drawdown tracked in docs/STATUS.md.
@@ -38,6 +42,11 @@ permissions:
 # Bronze is append-only (ADR-0003), so two overlapping runs would not corrupt anything — they
 # would just write duplicate observations and double the request rate against an unofficial
 # API. Queue instead of cancelling: a run already talking to FPL should finish cleanly.
+#
+# `cancel-in-progress: false` is load-bearing for the Postgres job specifically. A cancelled
+# runner is hard-killed, which is the one way the `if: always()` revoke gets skipped — so
+# cancellation is precisely how ADR-0021's orphaned-rule failure mode happens. Queueing means
+# the platform never creates that situation on our behalf.
 concurrency:
   group: ingest-bronze
   cancel-in-progress: false
@@ -104,3 +113,113 @@ jobs:
           else
             python run_fpl.py
           fi
+
+  postgres:
+    name: Postgres -> Bronze
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+      # `gh run view`, used by the start-of-run sweep to tell an orphaned ephemeral rule from
+      # one a concurrent run legitimately owns. Read-only, and scoped to this job rather than
+      # the workflow because the FPL job has no business reading run metadata.
+      actions: read
+    defaults:
+      run:
+        working-directory: ingest
+
+    env:
+      # Must match `terraform output -raw rds_password_ssm_parameter` (ADR-0019). Not a repo
+      # variable: it is derived from constants (project + environment) and a mismatch fails
+      # loudly with ParameterNotFound rather than doing something subtle.
+      SSM_PASSWORD_PARAMETER: /pitch-control/dev/rds/password
+      # The DB instance identifier is stable across a destroy/recreate; the endpoint is not.
+      # Resolving the endpoint from the identifier at run time is what keeps this job working
+      # after the teardown/rebuild cycles the free-plan cost posture encourages.
+      DB_INSTANCE_IDENTIFIER: pitch-control-pg
+      SG_NAME_TAG: pitch-control-rds
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: ingest/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Asserted before anything expensive or exposing happens. This job opens a hole in a
+      # security group; discovering a broken pipeline *after* that is the wrong order.
+      - name: Unit tests
+        run: pytest -q
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_INGEST_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: ingest-postgres-${{ github.run_id }}
+
+      # Self-healing: if a previous run was hard-killed before its revoke, its rule is still
+      # open. Sweeping here means the next scheduled run closes it without anyone noticing —
+      # the scheduled janitor exists for the case where there *is* no next run.
+      - name: Sweep orphaned ephemeral SG rules
+        run: $GITHUB_WORKSPACE/.github/scripts/sg-ephemeral.sh sweep
+
+      - name: Open ephemeral SG ingress for this runner
+        run: $GITHUB_WORKSPACE/.github/scripts/sg-ephemeral.sh open
+
+      # `*.pem` is gitignored, so the bundle cannot be read from the repo — it must be
+      # fetched. That is not a workaround: pinning a CA bundle into a public repo is how you
+      # end up trusting an expired root long after AWS has rotated it.
+      - name: Fetch the RDS CA bundle
+        run: |
+          set -euo pipefail
+          curl -sSf --max-time 30 -o "$RUNNER_TEMP/global-bundle.pem" \
+            https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+          # A proxy error page would also be a 200 with a body; verify it is really a cert
+          # before handing it to libpq, which reports a bad bundle as a vague TLS failure.
+          openssl x509 -in "$RUNNER_TEMP/global-bundle.pem" -noout -subject >/dev/null
+
+      # The secret is fetched and used inside ONE step, so it never reaches $GITHUB_ENV, a
+      # file, or another step's environment. This is the ADR-0019 runtime path end to end:
+      # 1Password seeded it, SSM holds it, the role's own OIDC credentials read it, and it
+      # lives only in this process.
+      - name: Load Postgres into Bronze
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PITCH_CONTROL_LAKE_BUCKET}" ]; then
+            echo "::error::PITCH_CONTROL_LAKE_BUCKET repo variable is not set — refusing to run."
+            exit 1
+          fi
+
+          PITCH_CONTROL_PG_HOST="$(aws rds describe-db-instances \
+            --db-instance-identifier "$DB_INSTANCE_IDENTIFIER" \
+            --query 'DBInstances[0].Endpoint.Address' --output text)"
+          export PITCH_CONTROL_PG_HOST
+          echo "RDS endpoint: ${PITCH_CONTROL_PG_HOST}"
+
+          PITCH_CONTROL_PG_PASSWORD="$(aws ssm get-parameter \
+            --name "$SSM_PASSWORD_PARAMETER" --with-decryption \
+            --query 'Parameter.Value' --output text)"
+          export PITCH_CONTROL_PG_PASSWORD
+          # Belt and braces. dlt and psycopg2 do not print the password, but a stack trace
+          # from a library that has not been audited for it might — and a public repo's logs
+          # are world-readable the moment they are written.
+          echo "::add-mask::${PITCH_CONTROL_PG_PASSWORD}"
+
+          export PITCH_CONTROL_PG_SSLROOTCERT="$RUNNER_TEMP/global-bundle.pem"
+          python run_postgres.py
+
+      # The first line of defence (ADR-0021). `always()` so it runs when the load fails, when
+      # the CA fetch fails, and when the job is cancelled mid-step — every path except a
+      # hard-killed runner, which is exactly what the sweep and the janitor are for.
+      - name: Revoke ephemeral SG ingress
+        if: always()
+        run: $GITHUB_WORKSPACE/.github/scripts/sg-ephemeral.sh close

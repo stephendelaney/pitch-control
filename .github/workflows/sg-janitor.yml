@@ -1,0 +1,68 @@
+# ADR-0021's third line of defence for the ephemeral security-group ingress.
+#
+# The first two are inside the ingest workflow: an `if: always()` revoke, and a start-of-run
+# sweep that cleans up after a run which never got to revoke. Both share one weakness — they
+# only fire *if ingest runs again*. This workflow is what bounds the exposure window when it
+# does not: a paused schedule, a broken pipeline nobody has fixed yet, a repo left alone over
+# a holiday. Those are precisely the periods when an orphaned rule would sit open longest.
+#
+# What "open" means concretely: 5432 reachable from a GitHub-hosted runner's /32 that the
+# project no longer controls, and Azure recycles those addresses. Postgres still demands TLS
+# and the master password, so this is a hardening failure rather than an open door — but it is
+# a SEV2 in docs/runbooks/orphaned-sg-rule.md, and the runbook assumes this job exists.
+#
+# All the logic lives in .github/scripts/sg-ephemeral.sh, shared with the ingest workflow, so
+# the sweep can never drift from the stamping convention the opener writes.
+name: sg-janitor
+
+on:
+  schedule:
+    # 07:00 UTC — an hour after the 06:00 ingest run, so on an ordinary day this sweeps a
+    # security group that is already clean and finds nothing. That is the intended steady
+    # state: a janitor that regularly has work to do is reporting a bug in the revoke path.
+    - cron: "0 7 * * *"
+  # Manual trigger for the runbook's remediation step: it is easier to tell someone to run
+  # this than to have them hand-assemble a revoke call under pressure.
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  # `gh run view` — distinguishes an orphan from a rule a currently-running ingest job owns.
+  # Without this the janitor would happily revoke a healthy run's ingress mid-load.
+  actions: read
+
+# Two janitors sweeping at once would race on the same revoke; the loser sees an already-gone
+# rule and fails. Cancelling the older one is safe here (unlike in ingest, where cancellation
+# is what *creates* orphans) because this job holds nothing and can simply run again.
+concurrency:
+  group: sg-janitor
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: Sweep orphaned ephemeral SG rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SG_NAME_TAG: pitch-control-rds
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          # The same runtime ingest role the opener uses — it already holds the narrow,
+          # SG-scoped grant, and inventing a second identity for the cleanup half of one
+          # mechanism would split an atomic responsibility across two roles (ADR-0020).
+          role-to-assume: ${{ vars.AWS_INGEST_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: sg-janitor-${{ github.run_id }}
+
+      - name: Sweep
+        # No GITHUB_RUN_ID guard needed: this workflow never opens a rule, so every stamped
+        # rule it finds belongs to some ingest run, and the script's in-progress check is the
+        # only thing standing between a live run and a revoked ingress.
+        run: .github/scripts/sg-ephemeral.sh sweep
