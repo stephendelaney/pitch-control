@@ -18,4 +18,4 @@ psycopg2-binary==2.9.10
 # trip-wire (step duration + memory against the 15-min Lambda cap) both need this number, and
 # Wk 3 is when the jobs start writing that row. Cheaper to have it before it is needed than to
 # discover the column is unfillable.
-psutil==7.1.3
+psutil==7.2.2
