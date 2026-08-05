@@ -105,9 +105,21 @@ plus a `dbt deps` step and a hub fetch in CI to get one twelve-line macro is not
 worth making. When a second or third dbt_utils test is genuinely wanted, take the package and
 delete the file.
 
-**📄 `.github/dependabot.yml` is written** (STATUS next-action 0b) — `github-actions` at the
-root plus `pip` for `ingest/` and `transform/`, weekly, 3 open PRs per ecosystem. **Not yet
-pushed, and the `dependabot_security_updates` repo toggle is separate and still off.**
+**🔐 The Wk-3 hardening block is closed.** `sha_pinning_required` is now `true` and
+`dependabot_security_updates` is `enabled` — the latter **already opened PR #3** (pytest 8.4.2 →
+9.0.3 in `ingest/`), which is worth understanding: security updates run off the dependency graph
+and need **no config file**, so that PR is not evidence that `dependabot.yml` is live. It is not
+— `.github/dependabot.yml` is written but sits in the unpushed `wk3-gold` commit, so the
+*version-bump* half (weekly `github-actions` at the root + `pip` for `ingest/` and `transform/`,
+3 open PRs each) starts only when the branch reaches `main`.
+
+**📐 Decisions.** [**ADR-0023**](adr/0023-silver-snapshot-semantics.md) (Silver snapshot
+semantics) is **✅ ratified 2026-08-05**. [**ADR-0024**](adr/0024-gold-grain.md) (**Gold grain**)
+is newly **📝 drafted** at the maintainer's suggestion, recording the two choices above — the
+two-sided unpivot and the densified grid — as one rule: *Gold carries the grain the question
+has, not the source's, and absence is an explicit flag rather than a missing row.* Written down
+specifically because the second one is **unfalsifiable against today's data** (no blanks, no
+doubles), so a future session would find a cross join with no visible reason to exist.
 
 <details><summary>Prior phase — Wk 3, Silver live in S3 (2026-08-04)</summary>
 
@@ -677,76 +689,52 @@ delegable: **B6** (remote state, post-apply only).
 | **0020** (IAM authorization model) | ✅ Accepted — ratified 2026-07-03 (merged via PR #1). One role per compute identity; `tf-plan`/`tf-apply` CI split (Wk-2 Terraform follow-up); shared runtime exec role, split-on-divergence. |
 | **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
 | **0022** (public-repo strategy) | ✅ Accepted — ratified 2026-07-04. Stay public + build in public; Wk-5+ Jekyll Pages showcase layered on top (not a private-repo reveal); enabled by a secret/PII leakage gate before Wk 2 (B10). |
-| **0023** (Silver snapshot semantics) | 📝 **Proposed — awaiting ratification.** Silver takes every row of the latest *committed* Bronze load (dlt `_dlt_loads`, `status = 0`), not the latest observation per key: a removed entity must disappear rather than linger, and a partial load must be structurally unselectable. Governs every staging model, including the Postgres ones when they arrive. |
+| **0023** (Silver snapshot semantics) | ✅ Accepted — ratified 2026-08-05. Silver takes every row of the latest *committed* Bronze load (dlt `_dlt_loads`, `status = 0`), not the latest observation per key: a removed entity must disappear rather than linger, and a partial load must be structurally unselectable. Governs every staging model, including the Postgres ones when they arrive. |
+| **0024** (Gold grain) | 📝 **Proposed — awaiting ratification.** Gold models carry the grain the *question* has, not the source's: a two-sided fact is unpivoted to one row per participant (`fct_team_fixture`, 760 rows), and a model that windows over a sequence densifies it first (`mart_team_fixture_run`, 20 × 38 cross join) so a `rows` frame counts gameweeks by construction. Absence is an explicit flag, never a missing row. |
 
 ## Immediate next actions
 
 > ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver *and* Gold are live in S3 and
-> `dbt build` is green (16 models, 148 tests). **This session's work is uncommitted** — the
-> Gold layer, `.github/dependabot.yml`, the `.gitignore` entry, `transform/README.md` and this
-> file. Everything before it is on `origin/main` (`be4ea2a`).
+> `dbt build` is green (16 models, 148 tests). **The Wk-3 hardening block is fully closed:**
+> `sha_pinning_required` is `true`, `dependabot_security_updates` is `enabled` (and has already
+> opened PR #3, bumping pytest in `ingest/` — that is the *security-updates* feature, which
+> works without a config file), and **ADR-0023 is ratified ✅**.
 >
-> **Commit it first** (Terminal, so `gitleaks` runs — see the note at the foot of this block).
-> `.github/dependabot.yml` is inside `.github/`, so **push this bundle via GitHub Desktop**:
+> **0 — ⚠️ THE ONE OUTSTANDING ACTION: push `wk3-gold`.** The Gold layer is committed locally as
+> **`d365829` on branch `wk3-gold`, and `main` is still `be4ea2a`** — the branch is not on the
+> remote, so `.github/dependabot.yml` **is not live yet**. Until it lands, the *version-bump*
+> half of Dependabot (the half that collects the debt SHA-pinning created — a pin never moves,
+> so actions go stale including their security fixes) is doing nothing. Add this session's ADR
+> work to the same branch first:
 >
 > ```bash
 > cd ~/Documents/GitHub/just-for-fun
-> git checkout -b wk3-gold
-> git add transform/ docs/STATUS.md .github/dependabot.yml .gitignore
-> git commit -m "feat(transform): Wk3 — Gold layer (FPL-only) + dependabot"
+> git add docs/adr/ docs/STATUS.md
+> git commit -m "docs(adr): ratify 0023, draft 0024 (Gold grain)"
 > ```
 >
-> **0 — Two repo settings, in this order.**
+> Then **push via GitHub Desktop** — the bundle touches `.github/`, and the CLI token lacks
+> `workflow` scope — and open a PR into `main`.
 >
-> **(a) Enable `sha_pinning_required` — now unblocked and safe.** The ordering hazard is gone:
-> `main` carries the pins and janitor run `30965716847` proved OIDC still works through them.
-> Note this is a `PUT` that *replaces* the object, so all three fields are required — dropping
-> the other two would silently reset your Actions policy:
->
-> ```bash
-> gh api -X PUT repos/stephendelaney/pitch-control/actions/permissions --input - <<'JSON'
-> {"enabled":true,"allowed_actions":"all","sha_pinning_required":true}
-> JSON
-> ```
->
-> Only `checkout` + `configure-aws-credentials` have run pinned so far. `setup-terraform` gets
-> exercised by the next push (`terraform-check` has no `workflow_dispatch`, so a push is the
-> only trigger) and `setup-python` by the 06:00 ingest run. Enabling before those is low risk —
-> same API resolution — but that is where a surprise would appear.
->
-> **(b) Dependabot — the file is written, the toggle is not flipped.**
-> `.github/dependabot.yml` now exists (`github-actions` at the root + `pip` for `ingest/` and
-> `transform/`, weekly, 3 open PRs each) and takes effect **as soon as it is on `main`** — this
-> is the half that collects the debt SHA-pinning created, since a pin never moves and stale
-> actions include stale security fixes. Dependabot understands SHA pins specifically: it bumps
-> the SHA *and* rewrites the `# v7` comment beside it.
->
-> `dependabot_security_updates` is a **separate** free feature (vulnerable dependencies, not
-> version bumps) and is still `disabled`:
->
-> ```bash
-> gh api -X PUT repos/stephendelaney/pitch-control/vulnerability-alerts
-> gh api -X PUT repos/stephendelaney/pitch-control/automated-security-fixes
-> ```
->
-> Expect the first Monday batch to be noisy, then quiet.
+> **Watch the first `terraform-check` run on that push.** It is the first time `setup-terraform`
+> resolves through its SHA pin (that workflow has no `workflow_dispatch`, so a push is its only
+> trigger), and a wrong SHA fails at *run* time, not parse time. `setup-python` gets the same
+> first exercise on the next 06:00 ingest run.
 >
 > **Do not retry `secret_scanning_non_provider_patterns` — closed, not deferred.** See *Current
 > phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
 > `detect-private-key` already cover the category.
 >
-> **1 — Ratify or reject [ADR-0023](adr/0023-silver-snapshot-semantics.md)** (📝 Proposed). It
-> is already implemented, so a rejection means reworking every staging model — worth 10 minutes
-> now. The one-line version: *Silver takes a whole committed load, not the newest row per key,
-> so a deleted entity disappears instead of lingering forever.*
+> **1 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
+> at your suggestion). Like 0023 it is already implemented, so a rejection means reworking
+> `fct_team_fixture` and `mart_team_fixture_run`. The one-line version: *Gold models carry the
+> grain the question has, not the source's — a two-sided fact is unpivoted to one row per
+> participant, and a model that windows over a sequence densifies that sequence first.*
 >
-> **2 — Consider an ADR for the Gold grain decisions, or explicitly decline one.** Two choices
-> in this session are the kind that a later session will "simplify" without knowing why they are
-> there: the **team × fixture unpivot**, and the **cross-join grid** that makes a `rows` window
-> frame count gameweeks rather than fixtures. Both are currently defended only by a test and a
-> comment, which is *probably* enough — they are modelling consequences of ADR-0003/0013 rather
-> than new architectural bets, and the house rule reserves ADRs for significant decisions. Worth
-> five minutes to decide deliberately rather than by omission.
+> The part worth scrutinising is the **scope limit in Consequences**: this licenses densifying a
+> model that windows over the sequence being densified, and explicitly does *not* license
+> densifying everything. The multiplier is structural — 20 × 38 is 760 rows, but 568 × 38 would
+> be 21,584, and `event_live` will make that question concrete.
 >
 > **Then the rest of Wk 3 — two carried-forward items, both unblocked.**
 >
