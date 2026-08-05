@@ -222,8 +222,12 @@ Applied:
    GitHub echoed `(SHA:3d3c42e5…)` / `(SHA:e6de0542…)`, OIDC still assumed the role through the
    pinned action, and the sweep returned `nothing to sweep`. That was the real risk of pinning —
    a wrong SHA fails at *run* time, not at parse time.
-   ⚠️ Only `checkout` + `configure-aws-credentials` have run pinned so far; `setup-python`
-   (ingest) and `setup-terraform` (terraform-check) are still unexercised.
+   ✅ **All four are now proven at run time (2026-08-05).** `setup-terraform` (`dfe3c3f8…`) and
+   `setup-python` (`5fda3b95…`) — the two this note flagged as unexercised — both resolved on
+   Dependabot's PR #3, runs [`31002741083`](https://github.com/stephendelaney/pitch-control/actions/runs/31002741083)
+   and [`31002741014`](https://github.com/stephendelaney/pitch-control/actions/runs/31002741014).
+   GitHub echoed `(SHA:…)` for each. Fittingly, the PR that exists *because* pins go stale is
+   what proved the pins resolve.
 2. **gitleaks is checksum-verified** against a hardcoded SHA256, downloaded to a file instead
    of `curl | tar`. The point is subtle: this is the *scanner*, so a swapped binary still exits
    0 and silently disables the secret scan. A checksums file fetched from the same release
@@ -700,32 +704,77 @@ delegable: **B6** (remote state, post-apply only).
 > opened PR #3, bumping pytest in `ingest/` — that is the *security-updates* feature, which
 > works without a config file), and **ADR-0023 is ratified ✅**.
 >
-> **0 — ⚠️ THE ONE OUTSTANDING ACTION: push `wk3-gold`.** The Gold layer is committed locally as
-> **`d365829` on branch `wk3-gold`, and `main` is still `be4ea2a`** — the branch is not on the
-> remote, so `.github/dependabot.yml` **is not live yet**. Until it lands, the *version-bump*
-> half of Dependabot (the half that collects the debt SHA-pinning created — a pin never moves,
-> so actions go stale including their security fixes) is doing nothing. Add this session's ADR
-> work to the same branch first:
+> **0 — ⚠️ OPEN THE PR FOR `wk3-gold`.** The branch is **pushed** (2026-08-05) but `main` is
+> still `be4ea2a`, so `.github/dependabot.yml` is **not live** and the *version-bump* half of
+> Dependabot is still doing nothing. Note that **pushing the branch ran no checks at all** —
+> `terraform-check` triggers on `pull_request` and `push` to `main` only, so a topic-branch push
+> fires nothing. The PR is what runs CI.
+>
+> `wk3-gold` carries two commits, both on the remote: **`d365829`** (Gold layer + dependabot)
+> and **`74d1c65`** (ratify 0023, draft 0024). Only this file and the leak-runbook edit below
+> are still uncommitted:
 >
 > ```bash
 > cd ~/Documents/GitHub/just-for-fun
-> git add docs/adr/ docs/STATUS.md
-> git commit -m "docs(adr): ratify 0023, draft 0024 (Gold grain)"
+> git add docs/STATUS.md docs/runbooks/secret-leak-response.md
+> git commit -m "docs: branch-protection rationale + admin-bypass note in the leak runbook"
 > ```
 >
-> Then **push via GitHub Desktop** — the bundle touches `.github/`, and the CLI token lacks
-> `workflow` scope — and open a PR into `main`.
+> Push via GitHub Desktop (the bundle touches `.github/`; the CLI token lacks `workflow` scope),
+> then open the PR into `main`.
 >
-> **Watch the first `terraform-check` run on that push.** It is the first time `setup-terraform`
-> resolves through its SHA pin (that workflow has no `workflow_dispatch`, so a push is its only
-> trigger), and a wrong SHA fails at *run* time, not parse time. `setup-python` gets the same
-> first exercise on the next 06:00 ingest run.
+> **1 — Protect `main` (in progress 2026-08-05).** GitHub's nudge, taken up for a sharper reason
+> than the one it gives: **`main` is a credential boundary, not just a branch.** Both
+> `tf-apply` (`iam_oidc.tf:84`) and `pitch-control-ingest` (`iam_ingest.tf:33`) trust
+> `repo:…:ref:refs/heads/main`, so anything reaching `main` can assume a write-capable AWS role.
+> A force-push there is an AWS-access event. There was **no ruleset and no classic protection**
+> as of this session.
+>
+> *(Terminology: this is **branch** protection. Secret-scanning **push** protection is a
+> different feature and has been on since 2026-07-11.)*
+>
+> ```bash
+> gh api -X PUT repos/stephendelaney/pitch-control/branches/main/protection --input - <<'JSON'
+> {
+>   "required_status_checks": {
+>     "strict": false,
+>     "contexts": ["fmt + validate (offline)", "gitleaks secret scan"]
+>   },
+>   "enforce_admins": false,
+>   "required_pull_request_reviews": null,
+>   "restrictions": null,
+>   "allow_force_pushes": false,
+>   "allow_deletions": false
+> }
+> JSON
+> ```
+>
+> Three things in that config are deliberate and each would be wrong the other way:
+>
+> - **`ingest-check` is *not* a required context.** It carries `paths:` filters
+>   (`ingest/**`, `sg-ephemeral.sh`, its own file), and a required check that never *runs* never
+>   reports — the PR then blocks forever. Only `terraform-check`'s two jobs fire unconditionally
+>   on every PR→main. Requiring `gitleaks secret scan` is the real prize: it makes ADR-0022
+>   layer 3 a merge gate, so a secret cannot reach `main` even if the local hook was bypassed
+>   with `--no-verify`.
+> - **`enforce_admins: false`**, because
+>   [`runbooks/secret-leak-response.md`](runbooks/secret-leak-response.md) step 3 prescribes
+>   `git filter-repo` then `git push --force-with-lease origin main`. Blocking force-pushes
+>   without an admin bypass would stall a SEV1 response on a settings page.
+> - **`required_pull_request_reviews: null`**, because a solo maintainer cannot approve their own
+>   PR — requiring a review locks the repo.
+>
+> Expect one behaviour change: direct pushes to `main` effectively end, since a direct push has
+> no passing check for that commit and the check only runs after the push.
+>
+> **Add `transform-check` to `contexts` when it exists** (see the CI gap below) — a required
+> check list is only as good as the checks in it, and `dbt` is currently guarded by nothing.
 >
 > **Do not retry `secret_scanning_non_provider_patterns` — closed, not deferred.** See *Current
 > phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
 > `detect-private-key` already cover the category.
 >
-> **1 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
+> **2 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
 > at your suggestion). Like 0023 it is already implemented, so a rejection means reworking
 > `fct_team_fixture` and `mart_team_fixture_run`. The one-line version: *Gold models carry the
 > grain the question has, not the source's — a two-sided fact is unpivoted to one row per

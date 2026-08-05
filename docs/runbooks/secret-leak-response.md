@@ -38,6 +38,13 @@ reverse it.
      `git filter-repo --path <leaked-file> --invert-paths` (whole file), or
      `--replace-text <patterns.txt>` (value only, `LEAKED==>REDACTED`).
    - Then **force-push** the rewritten history: `git push --force-with-lease origin main`.
+   - ⚠️ **`main` is force-push protected, and this step depends on your admin bypass.** Branch
+     protection sets `allow_force_pushes: false` with **`enforce_admins: false`** — that second
+     flag is what keeps this line executable, and it was chosen for this runbook specifically.
+     If the push is rejected, someone has since enabled "do not allow bypassing the above
+     settings": lift protection, purge, re-enable. Do **not** let a settings page stall a SEV1 —
+     and note the rejection message names branch protection, not the bypass, so this is easy to
+     misdiagnose under pressure.
    - Note: this rewrites SHAs — a solo repo makes this cheap; anyone with a fork/clone still has the old
      history, which is *why step 1 (rotation) is what actually protects you.*
 4. **Invalidate caches where possible** — for a GitHub secret-scanning alert, mark it resolved only
