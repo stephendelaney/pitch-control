@@ -79,11 +79,21 @@ jobs:
           cache: pip
           cache-dependency-path: ingest/requirements-dev.txt
 
+      # ⚠️ This installs the *dev* set, so pytest and everything it drags in are present in a
+      # job that is about to hold AWS credentials. That is deliberate — the pre-flight test
+      # below needs pytest — but it means "requirements-dev" is a production dependency here,
+      # not a test-only one. Weigh anything added to that file accordingly.
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
       # The selection rule is pure and hits no network (see ingest/fpl/gameweeks.py), so it
       # is cheap to assert before spending an AWS credential or an FPL request on the run.
+      #
+      # 🔒 STEP ORDER IS LOAD-BEARING: this runs *before* configure-aws-credentials, so the
+      # test dependencies execute in a step that has no cloud credential to steal. Do not move
+      # the AWS setup up beside the other `uses:` steps to tidy the file — that would put every
+      # transitive dev dependency inside the credentialed window. (Live example: 2026-08-05,
+      # GHSA-6w46-j5rx-g56g in pytest — a dev-set advisory reaching this job.)
       - name: Unit tests
         run: pytest -q
 
@@ -156,11 +166,19 @@ jobs:
           cache: pip
           cache-dependency-path: ingest/requirements-dev.txt
 
+      # ⚠️ The dev set again — see the note on the `fpl` job. pytest is a production dependency
+      # of this job, and this one goes further than that one does: it also reaches SSM for the
+      # RDS password and opens a security-group hole.
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
       # Asserted before anything expensive or exposing happens. This job opens a hole in a
       # security group; discovering a broken pipeline *after* that is the wrong order.
+      #
+      # 🔒 STEP ORDER IS LOAD-BEARING, and doubly so here: this runs *before*
+      # configure-aws-credentials, the SSM secret fetch and the SG open, so the test
+      # dependencies execute with no credential, no password and no network path to RDS. Every
+      # one of those three is a reason not to move the AWS setup earlier.
       - name: Unit tests
         run: pytest -q
 
