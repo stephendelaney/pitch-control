@@ -15,12 +15,23 @@ seed-paths: ["seeds"]
 # over it, so `ref()` keeps working for downstream models and tests while the artifact that
 # actually persists is the file in the lake.
 #
-# The write path is `external_root` from profiles.yml + `<model>.parquet`. Gold will need
-# `<lake>/gold`, so when it lands it overrides `location` in its own config block rather than
-# changing this — `external_root` is a single value per target.
+# The write path is `external_root` from profiles.yml + `<model>.parquet`, which is why Silver
+# needs no `location` at all. `external_root` is a single value per target, so Gold — which
+# lands under `<lake>/gold` — cannot be served by it and each Gold model calls
+# `{{ config(location=gold_location()) }}` in its own header instead.
+#
+# It has to be per-model rather than a `+location` here: dbt renders dbt_project.yml at project
+# load, before user macros exist (`'gold_location' is undefined`) and with no `this` to name the
+# file — so every model would collide on one path even if the macro resolved. `gold_location()`
+# reads the same PITCH_CONTROL_LAKE_BUCKET switch profiles.yml does, so one env var still moves
+# the whole project between the lake and local disk.
 models:
   pitch_control:
     silver:
       +materialized: external
       +format: parquet
       +schema: silver
+    gold:
+      +materialized: external
+      +format: parquet
+      +schema: gold

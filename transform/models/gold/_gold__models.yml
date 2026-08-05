@@ -1,0 +1,311 @@
+version: 2
+
+models:
+  - name: dim_team
+    description: >
+      The 20 clubs as the Gold dimension everything joins to. FPL's six strength ratings
+      collapsed into three facets (the home/away pair averaged) with the split kept alongside,
+      plus squad depth and price range per club. Only the `overall` facet is populated today —
+      attack and defence are 0 for all 20 clubs and are kept so the schema does not move when
+      FPL fills them in.
+    columns:
+      - name: team_id
+        description: FPL's season-scoped club id. The FK target for every other Gold model.
+        data_tests: [unique, not_null]
+      - name: team_code
+        description: Stable cross-season club identifier.
+        data_tests: [unique, not_null]
+      - name: team_name
+        data_tests: [unique, not_null]
+      - name: team_short_name
+        data_tests: [unique, not_null]
+      - name: strength_overall
+        description: The home/away average of the one strength facet FPL currently populates.
+        data_tests: [not_null]
+      - name: home_away_strength_delta
+        description: >
+          Home rating minus away rating. Named for what it measures, not for the home advantage
+          it looks like: it is 0 for twelve clubs and -1 for the other eight, never positive.
+        data_tests: [not_null]
+      - name: player_count
+        description: >
+          Buyable-or-not player count for the club. Not-null because every club in the FPL
+          payload has players — a null here would mean the join to stg_fpl__players found none,
+          which is a broken snapshot rather than an empty club.
+        data_tests: [not_null]
+
+  - name: dim_player
+    description: >
+      Players denormalised onto club and position — the spine of Gold. The decision-relevant
+      subset of Silver's ~104 columns, plus `is_pickable`, which collapses FPL's three separate
+      availability flags into the single one a squad builder filters on.
+    columns:
+      - name: player_id
+        data_tests: [unique, not_null]
+      - name: player_code
+        data_tests: [unique, not_null]
+      - name: display_name
+        data_tests: [not_null]
+      - name: team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team_id
+      - name: team_short_name
+        description: Denormalised from dim_team. Not-null proves the join resolved for every player.
+        data_tests: [not_null]
+      - name: position_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__positions')
+                field: position_id
+      - name: position_short_name
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["GKP", "DEF", "MID", "FWD"]
+      - name: now_cost_gbp_m
+        data_tests: [not_null]
+      - name: is_pickable
+        description: >
+          Fit is not the same as buyable. FPL keeps players who have left the league in the
+          payload so existing squads still render, with `can_select` false — so this is
+          `is_selectable and is_transactable and not is_removed`, not `is_available`.
+        data_tests: [not_null]
+      - name: position_squad_required
+        description: How many of this position a legal 15-player squad must hold (ADR-0018 — FPL's number).
+        data_tests: [not_null]
+
+  - name: fct_team_fixture
+    description: >
+      One row per team per fixture — the season seen from both dugouts, 760 rows. Unpivoting
+      Silver's two-sided fixture row is what turns "this team's next five" from a
+      pick-the-right-branch problem into a `where team_id = ?`. Result columns are null until
+      the first match is played (the split-null-rule columns, surfaced by Silver as typed NULLs).
+    columns:
+      - name: fixture_id
+        description: Not unique here — a fixture appears twice, once per side. Uniqueness is on (fixture_id, team_id).
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__fixtures')
+                field: fixture_id
+      - name: team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team_id
+      - name: opponent_team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team_id
+      - name: gameweek_id
+        description: >
+          Nullable by design, inherited from Silver — FPL leaves it null for a fixture it has
+          not yet assigned to a gameweek. Such a fixture is excluded from
+          mart_team_fixture_run by construction, which is correct: it is not in anyone's
+          next five.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__gameweeks')
+                field: gameweek_id
+      - name: is_home
+        data_tests: [not_null]
+      - name: venue
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["H", "A"]
+      - name: difficulty
+        description: FPL's 1-5, already from this team's point of view — not a rating of this team.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+      - name: opponent_difficulty
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+      - name: result
+        description: Null until the fixture is finished. Gated on `is_finished`, not on the scores being present — a 0-0 in progress has scores and no result.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["W", "D", "L"]
+    data_tests:
+      # The grain. `fixture_id` alone cannot carry a `unique` test here — it appears twice by
+      # design — so the composite is the only place the grain is actually asserted.
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [fixture_id, team_id]
+
+  - name: mart_team_fixture_run
+    description: >
+      Fixture difficulty by team and gameweek with a rolling 5-gameweek outlook. 760 rows —
+      20 teams x 38 gameweeks, always, because the model cross joins the grid before folding
+      fixtures onto it. That completeness is what makes a `rows` window frame mean "the next
+      five gameweeks"; without it a blank gameweek would silently stretch one team's window to
+      six. See `assert_fixture_run_grid_is_complete`.
+    columns:
+      - name: team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team_id
+      - name: gameweek_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__gameweeks')
+                field: gameweek_id
+      - name: fixture_count
+        description: 0 on a blank gameweek, 2+ on a double. The column that makes the horizon totals interpretable.
+        data_tests: [not_null]
+      - name: is_blank
+        data_tests: [not_null]
+      - name: is_double
+        data_tests: [not_null]
+      - name: avg_difficulty
+        description: Null on a blank — a blank is no difficulty, not zero difficulty, and zero would sort as the easiest gameweek of the season.
+      - name: next_5_fixture_count
+        data_tests: [not_null]
+      - name: next_5_gameweeks_covered
+        description: 5 everywhere except the last four gameweeks, where the window runs off the end of the season.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+      - name: next_5_is_partial
+        data_tests: [not_null]
+    data_tests:
+      # Grain. `assert_fixture_run_grid_is_complete` checks the stronger property (the grid is
+      # the full 20x38 product with no gaps), but that test is about the window frame's
+      # correctness; this one states the model's grain where a reader looks for it.
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [team_id, gameweek_id]
+
+  - name: mart_player_value
+    description: >
+      Points per million and its rank within position, plus ownership and the club's 5-gameweek
+      fixture outlook at the planning gameweek.
+
+      ⚠️ The scoring columns currently describe **last season** — FPL carries the previous
+      season's totals in `bootstrap-static` until it resets them, so 400 of 568 players have
+      points and minutes while zero gameweeks have been played, attached to their *current*
+      club. `points_are_prior_season` labels it; any team-level roll-up of these columns while
+      that flag is true is wrong. Price, ownership and the fixture outlook are about the season
+      actually being played.
+    columns:
+      - name: player_id
+        data_tests: [unique, not_null]
+      - name: display_name
+        data_tests: [not_null]
+      - name: team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team_id
+      - name: position_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__positions')
+                field: position_id
+      - name: now_cost_gbp_m
+        data_tests: [not_null]
+      - name: points_per_million
+        description: >
+          The quantity that decides a squad under a fixed budget. Not-null because the price
+          floor is £3.8m and the `nullif` denominator guard only fires on a price of 0 — a null
+          here would mean FPL has published a free player.
+        data_tests: [not_null]
+      - name: value_rank_in_position
+        description: >
+          `rank()`, not `row_number()` — ties are real and common (168 players have never
+          scored, so they tie on every ratio at once) and breaking them would invent an
+          ordering.
+        data_tests: [not_null]
+      - name: points_are_prior_season
+        description: >
+          True while the scoring columns describe the previous season. Derived from evidence —
+          players have minutes while no gameweek has finished — not from FPL's flags or the
+          calendar, because FPL zeroes the totals at an unannounced point before GW1. Global to
+          the payload, so it is the same on every row. See
+          `assert_prior_season_points_are_flagged`.
+        data_tests: [not_null]
+      - name: planning_gameweek_id
+        description: >
+          The earliest unfinished gameweek — the one a manager is deciding for. Not `is_next`
+          or `is_current`: all three FPL flags are false pre-season, which is the state of the
+          lake today.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__gameweeks')
+                field: gameweek_id
+      - name: is_differential
+        description: >
+          A labelled opinion, not a fact — good value (top quartile in position) and lightly
+          owned (<5%). Its inputs sit beside it so the thresholds can be disagreed with without
+          forking the mart.
+        data_tests: [not_null]
+
+  - name: mart_position_scarcity
+    description: >
+      Four rows — one market per position. Supply, price distribution, and the cost of filling
+      the squad slots FPL makes compulsory. `minimum_squad_gbp_m` is the cheapest legal squad in
+      the game and is repeated on every row so a position filter does not hide the budget;
+      `assert_minimum_squad_fits_budget` fails the build if it stops fitting inside £100.0m.
+    columns:
+      - name: position_id
+        data_tests: [unique, not_null]
+      - name: position_short_name
+        data_tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["GKP", "DEF", "MID", "FWD"]
+      - name: squad_required
+        data_tests: [not_null]
+      - name: player_count
+        data_tests: [not_null]
+      - name: cheapest_fill_gbp_m
+        description: >
+          A lower bound, not a buildable squad — it ignores the max-3-per-club rule, which can
+          only push the real figure up.
+        data_tests: [not_null]
+      - name: minimum_squad_gbp_m
+        description: Window sum over all four position rows; the same value on every row by design.
+        data_tests: [not_null]
+      - name: budget_headroom_gbp_m
+        description: Budget minus the mandatory floor — the discretionary money that makes the game a game.
+        data_tests: [not_null]

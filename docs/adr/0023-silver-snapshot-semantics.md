@@ -1,7 +1,7 @@
 # ADR-0023: Silver snapshot semantics — the latest committed load, not the latest observation
 
-- **Status:** Proposed
-- **Date:** 2026-08-04
+- **Status:** Accepted
+- **Date:** 2026-08-04 (ratified 2026-08-05)
 - **Deciders:** Stephen Delaney
 - **Tags:** data-platform, transform, modeling, correctness
 

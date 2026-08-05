@@ -29,7 +29,8 @@ Significant decisions are recorded here using [MADR-lite](template.md). ADRs are
 | [0020](0020-iam-authorization-model.md) | IAM authorization model — one role per compute identity, least privilege | ✅ Accepted |
 | [0021](0021-ci-ingest-network-path.md) | Wk-2 ingest network path — workflow-managed ephemeral SG ingress (runner→RDS) | ✅ Accepted |
 | [0022](0022-public-repo-strategy.md) | Public-repo strategy — build in public + Pages showcase, gated by secret/PII leakage controls | ✅ Accepted |
-| [0023](0023-silver-snapshot-semantics.md) | Silver snapshot semantics — latest committed load, not latest observation per key | 📝 Proposed |
+| [0023](0023-silver-snapshot-semantics.md) | Silver snapshot semantics — latest committed load, not latest observation per key | ✅ Accepted |
+| [0024](0024-gold-grain.md) | Gold grain — unpivot two-sided facts, densify before windowing | 📝 Proposed |
 
 **Status legend:** ✅ Accepted · 📝 Proposed (decision leaning made, rationale not yet written) ·
 🔄 Superseded · ⚠️ Deprecated
