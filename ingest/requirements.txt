@@ -11,7 +11,7 @@ dlt[filesystem,sql_database]==1.29.1
 # GitHub runner needs no `libpq-dev` apt step and the ingest job has no compiler on its
 # critical path. The known caveat (its bundled libssl can clash inside another C extension's
 # process) does not apply — this runs as a standalone script, not embedded in one.
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.12
 
 # Lets dlt collect memory stats instead of warning that it cannot. Not cosmetic: the seed
 # schema's `ops.pipeline_runs.peak_mem_mb` and the ADR-0007 amendment's Fargate-overflow
