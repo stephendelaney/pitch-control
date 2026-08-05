@@ -698,58 +698,33 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver *and* Gold are live in S3 and
-> `dbt build` is green (16 models, 148 tests). **The Wk-3 hardening block is fully closed:**
-> `sha_pinning_required` is `true`, `dependabot_security_updates` is `enabled` (and has already
-> opened PR #3, bumping pytest in `ingest/` — that is the *security-updates* feature, which
-> works without a config file), and **ADR-0023 is ratified ✅**.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary, nothing uncommitted, nothing in flight.**
+> Silver *and* Gold are live in S3 and `dbt build` is green (16 models, 148 tests). **The Wk-3
+> hardening block is fully closed:** `sha_pinning_required` `true`,
+> `dependabot_security_updates` `enabled`, `dependabot.yml` live, **`main` branch-protected**,
+> **ADR-0023 ratified ✅**, and all four SHA-pinned actions now proven at run time.
 >
-> **0 — ⚠️ OPEN THE PR FOR `wk3-gold`.** The branch is **pushed** (2026-08-05) but `main` is
-> still `be4ea2a`, so `.github/dependabot.yml` is **not live** and the *version-bump* half of
-> Dependabot is still doing nothing. Note that **pushing the branch ran no checks at all** —
-> `terraform-check` triggers on `pull_request` and `push` to `main` only, so a topic-branch push
-> fires nothing. The PR is what runs CI.
+> Start with the two short items below (**0** and **1**), then the real work is the CI gap.
 >
-> `wk3-gold` carries two commits, both on the remote: **`d365829`** (Gold layer + dependabot)
-> and **`74d1c65`** (ratify 0023, draft 0024). Only this file and the leak-runbook edit below
-> are still uncommitted:
+> **✅ Shipped 2026-08-05 — `main` is `4cfb7ec`** (merge of PR #4, `wk3-gold`). Post-merge
+> `terraform-check` green (run
+> [`31004346219`](https://github.com/stephendelaney/pitch-control/actions/runs/31004346219)).
+> Gold, `.github/dependabot.yml` and the ADRs are all on `main`; the branch is deleted both
+> sides and the local clone is cleaned up. **Nothing from this session is outstanding.**
 >
-> ```bash
-> cd ~/Documents/GitHub/just-for-fun
-> git add docs/STATUS.md docs/runbooks/secret-leak-response.md
-> git commit -m "docs: branch-protection rationale + admin-bypass note in the leak runbook"
-> ```
->
-> Push via GitHub Desktop (the bundle touches `.github/`; the CLI token lacks `workflow` scope),
-> then open the PR into `main`.
->
-> **1 — Protect `main` (in progress 2026-08-05).** GitHub's nudge, taken up for a sharper reason
-> than the one it gives: **`main` is a credential boundary, not just a branch.** Both
+> **✅ `main` is protected (2026-08-05)** — `allow_force_pushes: false`, `allow_deletions:
+> false`, `enforce_admins: false`, required checks `fmt + validate (offline)` +
+> `gitleaks secret scan`. The rationale is worth keeping because GitHub's own prompt does not
+> give it: **`main` is a credential boundary, not just a branch.** Both
 > `tf-apply` (`iam_oidc.tf:84`) and `pitch-control-ingest` (`iam_ingest.tf:33`) trust
 > `repo:…:ref:refs/heads/main`, so anything reaching `main` can assume a write-capable AWS role.
-> A force-push there is an AWS-access event. There was **no ruleset and no classic protection**
-> as of this session.
+> A force-push there is an AWS-access event.
 >
 > *(Terminology: this is **branch** protection. Secret-scanning **push** protection is a
-> different feature and has been on since 2026-07-11.)*
+> different feature and has been on since 2026-07-11. Both are now live; the names collide.)*
 >
-> ```bash
-> gh api -X PUT repos/stephendelaney/pitch-control/branches/main/protection --input - <<'JSON'
-> {
->   "required_status_checks": {
->     "strict": false,
->     "contexts": ["fmt + validate (offline)", "gitleaks secret scan"]
->   },
->   "enforce_admins": false,
->   "required_pull_request_reviews": null,
->   "restrictions": null,
->   "allow_force_pushes": false,
->   "allow_deletions": false
-> }
-> JSON
-> ```
->
-> Three things in that config are deliberate and each would be wrong the other way:
+> Three things in that config are deliberate and each would be wrong the other way — **do not
+> "tidy" them**:
 >
 > - **`ingest-check` is *not* a required context.** It carries `paths:` filters
 >   (`ingest/**`, `sg-ephemeral.sh`, its own file), and a required check that never *runs* never
@@ -764,8 +739,8 @@ delegable: **B6** (remote state, post-apply only).
 > - **`required_pull_request_reviews: null`**, because a solo maintainer cannot approve their own
 >   PR — requiring a review locks the repo.
 >
-> Expect one behaviour change: direct pushes to `main` effectively end, since a direct push has
-> no passing check for that commit and the check only runs after the push.
+> One behaviour change, already in effect: **direct pushes to `main` are over** — a direct push
+> has no passing check for that commit and the check only runs after the push. Work in branches.
 >
 > **Add `transform-check` to `contexts` when it exists** (see the CI gap below) — a required
 > check list is only as good as the checks in it, and `dbt` is currently guarded by nothing.
@@ -774,7 +749,21 @@ delegable: **B6** (remote state, post-apply only).
 > phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
 > `detect-private-key` already cover the category.
 >
-> **2 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
+> **0 — Triage the Dependabot queue (4 open PRs, ~10 minutes).** The first config-driven pass
+> ran all three ecosystems, and the *absence* of PRs is the informative part:
+> **`github_actions` found nothing to bump — the four SHA pins are already current**, which is
+> the first independent evidence that pinning has not quietly frozen the repo on stale actions.
+> `pip in /transform` likewise (dbt-core 1.12.0 / dbt-duckdb 1.10.1 / duckdb 1.5.5 are latest).
+> Only `ingest/` produced work: **#5** psycopg2-binary, **#6** pytest, **#7** psutil — exactly
+> the `open-pull-requests-limit: 3`.
+>
+> ⚠️ **#3 is a duplicate of #6** — both bump pytest *from 8.4.2*, #3 to 9.0.3 and #6 to 9.1.1.
+> They did not dedupe because they come from different Dependabot paths: **#3 from
+> `dependabot_security_updates`** (dependency graph, no config file) and **#6 from
+> `dependabot.yml`**. Close #3, merge #6. This also explains why four PRs are open against a
+> limit of three — security PRs do not count toward the version-update limit.
+>
+> **1 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
 > at your suggestion). Like 0023 it is already implemented, so a rejection means reworking
 > `fct_team_fixture` and `mart_team_fixture_run`. The one-line version: *Gold models carry the
 > grain the question has, not the source's — a two-sided fact is unpivoted to one row per
