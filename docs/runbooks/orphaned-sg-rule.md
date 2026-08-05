@@ -61,6 +61,11 @@ hard-killed runner (cancelled job, spot reclaim, OOM) skips the revoke.
    ```
    gh workflow run sg-janitor.yml -R stephendelaney/pitch-control
    ```
+   **A failed janitor run does not mean nothing was cleaned up.** The sweep revokes every rule
+   it can, then exits non-zero reporting how many it could not — so a red run is usually
+   *partial* success, not a no-op. Read the `::error::` lines for the specific rule ids and
+   re-run the Detection query; do not assume the security group is unchanged.
+
    Fall back to a manual revoke by rule id (from Detection) only if Actions is unavailable or
    the rule is unstamped and you have decided from Diagnosis that it should go:
    ```

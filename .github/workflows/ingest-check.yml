@@ -9,6 +9,10 @@
 # (ADR-0011 — never make the suite depend on an unofficial API being up); the Postgres half
 # reflects an in-memory SQLite database through the same SQLAlchemy path RDS uses, so it needs
 # no database server, no credential, and no open security group.
+#
+# Actions are SHA-pinned (see ingest-bronze.yml). There is no credential here to steal, but this
+# workflow runs on `pull_request` — including from forks — so it is the one place where the
+# runner already executes untrusted code. Pinning removes the second untrusted input.
 name: ingest-check
 
 on:
@@ -37,9 +41,9 @@ jobs:
         working-directory: ingest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           # Keep in lockstep with ingest-bronze.yml — testing on a different interpreter to
           # the one that runs the job defeats the point.

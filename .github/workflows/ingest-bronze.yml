@@ -15,6 +15,12 @@
 #
 # Cost: $0. Actions minutes are unmetered on public repos, and the load is a few MB of S3
 # PUTs a day — immaterial against the free-plan drawdown tracked in docs/STATUS.md.
+#
+# Third-party actions are pinned to a full commit SHA, with the version as a trailing comment.
+# A tag is a mutable pointer the action's owner can move at any time, and these jobs hand
+# `configure-aws-credentials` an OIDC token that it exchanges for real AWS credentials — so a
+# moved tag is credential theft, not a broken build. The SHA is the only immutable reference
+# GitHub offers. Bump deliberately (re-resolve the tag, read the diff), never automatically.
 name: ingest-bronze
 
 on:
@@ -63,9 +69,9 @@ jobs:
         working-directory: ingest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           # Pinned minor, not "3.x": this job runs unattended, and a silent interpreter bump
           # is not something we want to discover from a failed 06:00 run.
@@ -81,7 +87,7 @@ jobs:
       - name: Unit tests
         run: pytest -q
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_INGEST_ROLE_ARN }}
           aws-region: us-east-1
@@ -142,9 +148,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
           cache: pip
@@ -158,7 +164,7 @@ jobs:
       - name: Unit tests
         run: pytest -q
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_INGEST_ROLE_ARN }}
           aws-region: us-east-1
@@ -209,10 +215,29 @@ jobs:
             --name "$SSM_PASSWORD_PARAMETER" --with-decryption \
             --query 'Parameter.Value' --output text)"
           export PITCH_CONTROL_PG_PASSWORD
-          # Belt and braces. dlt and psycopg2 do not print the password, but a stack trace
-          # from a library that has not been audited for it might — and a public repo's logs
-          # are world-readable the moment they are written.
+          # NOT belt and braces — this is the only masking there is. GitHub automatically
+          # masks values that came from its own secrets store; this one comes from SSM at run
+          # time (ADR-0019), so nothing masks it unless we say so. A public repo's logs are
+          # world-readable the moment they are written.
           echo "::add-mask::${PITCH_CONTROL_PG_PASSWORD}"
+
+          # `add-mask` matches a literal string. Anything that renders the password in a
+          # *transformed* form slips straight past it — and assembling a DSN percent-encodes
+          # it, which is the one transformation on this job's actual code path.
+          #
+          # `PostgresTarget` avoids that today by handing SQLAlchemy's URL object around
+          # (it renders `***`), but that is one library's behaviour, not an invariant, and the
+          # failure mode is a password in a public log rather than an error. Masking the
+          # encoded form as well costs nothing and does not depend on that behaviour holding.
+          #
+          # Only when it differs: for a password with no reserved characters the two strings
+          # are identical, and masking the same value twice just adds noise.
+          PG_PASSWORD_URLENC="$(python -c \
+            'import os, urllib.parse; print(urllib.parse.quote(os.environ["PITCH_CONTROL_PG_PASSWORD"], safe=""))')"
+          if [ "$PG_PASSWORD_URLENC" != "$PITCH_CONTROL_PG_PASSWORD" ]; then
+            echo "::add-mask::${PG_PASSWORD_URLENC}"
+          fi
+          unset PG_PASSWORD_URLENC
 
           export PITCH_CONTROL_PG_SSLROOTCERT="$RUNNER_TEMP/global-bundle.pem"
           python run_postgres.py

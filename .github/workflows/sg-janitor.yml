@@ -13,6 +13,11 @@
 #
 # All the logic lives in .github/scripts/sg-ephemeral.sh, shared with the ingest workflow, so
 # the sweep can never drift from the stamping convention the opener writes.
+#
+# Actions are SHA-pinned for the reason spelled out in ingest-bronze.yml: this job also assumes
+# the AWS ingest role, and a mutable tag is a credential-theft path. It matters slightly more
+# here — this is the workflow that *closes* holes, so a compromise that silently no-ops it
+# would leave 5432 open with no failing run to notice.
 name: sg-janitor
 
 on:
@@ -50,9 +55,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: aws-actions/configure-aws-credentials@v6
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           # The same runtime ingest role the opener uses — it already holds the narrow,
           # SG-scoped grant, and inventing a second identity for the cleanup half of one

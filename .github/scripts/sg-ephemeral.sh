@@ -126,7 +126,7 @@ run_is_in_progress() {
 }
 
 cmd_sweep() {
-  local sg_id rules count=0
+  local sg_id rules count=0 failed=0
   sg_id="$(resolve_sg_id)"
 
   # Selected by the ManagedBy tag, not by description text: the tag is what the runbook keys
@@ -158,12 +158,26 @@ cmd_sweep() {
     # `always()` revoke did not happen, which is the SEV2 in the runbook. The sweep fixes the
     # exposure, but the fact that it had to is the signal.
     echo "::warning::revoking orphaned rule ${rule_id} from run ${run_id} (created ${created_at}) — see docs/runbooks/orphaned-sg-rule.md"
-    aws ec2 revoke-security-group-ingress \
-      --group-id "$sg_id" --security-group-rule-ids "$rule_id" >/dev/null
-    count=$((count + 1))
+
+    # Guarded rather than bare, because `set -e` would otherwise abort the whole loop on the
+    # first failure — leaving every *remaining* orphan open. That inverts the job: one rule
+    # that cannot be revoked (a race with another sweep, a throttled API call) would silently
+    # cost us the cleanup this workflow exists to perform, and the failed job would look like
+    # a single problem rather than N open holes.
+    #
+    # So: keep going, and still fail at the end. Neither half is optional — continuing without
+    # failing would hide the exposure, failing without continuing would widen it.
+    if aws ec2 revoke-security-group-ingress \
+        --group-id "$sg_id" --security-group-rule-ids "$rule_id" >/dev/null; then
+      count=$((count + 1))
+    else
+      echo "::error::failed to revoke orphaned rule ${rule_id} from run ${run_id} — see docs/runbooks/orphaned-sg-rule.md" >&2
+      failed=$((failed + 1))
+    fi
   done <<<"$rules"
 
   log "swept ${count} orphaned rule(s)"
+  [ "$failed" -eq 0 ] || die "${failed} orphaned rule(s) could not be revoked — 5432 may still be open"
 }
 
 case "${1:-}" in

@@ -1,9 +1,134 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-08-04**.
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-04** (Wk 3, Silver).
 
 ## Current phase
+
+**▶️ Wk 3 STARTED — Silver is LIVE in the lake (2026-08-04).** `transform/` is a working
+dbt-duckdb project: **10 models + 66 tests, `dbt build` green against live Bronze**, and
+**10 Parquet files (163 KB) now sit at `s3://pitch-control-lake-749614773761/silver/`**.
+Silver is done for the FPL side; **Gold is not started**, and that is the rest of Wk 3.
+
+```
+stg_fpl__players     568 rows / 104 cols     stg_fpl__phases          11
+stg_fpl__fixtures    380                     stg_fpl__chips            8
+stg_fpl__gameweeks    38                     stg_fpl__loads            6
+stg_fpl__stat_types   26                     stg_fpl__positions        4
+stg_fpl__teams        20                     stg_fpl__game_settings    1
+```
+
+**The centrepiece decision is [ADR-0023](adr/0023-silver-snapshot-semantics.md) — 📝 Proposed,
+awaiting ratification.** Bronze is append-only and every run appends a *full re-snapshot*, so
+reducing to current state had two defensible answers and they are not equivalent:
+
+- **latest observation per key** (the conventional dbt idiom) — an entity FPL *removes* keeps
+  its last observation forever, so Silver silently accumulates things that no longer exist.
+- **the latest complete snapshot** (chosen) — a disappearance shows up as a row-count change.
+
+Live, not theoretical: **the player count has moved 564 → 567 → 568** across the first six
+loads while FPL adds players pre-season. The snapshot is identified from **dlt's `_dlt_loads`
+ledger filtered to `status = 0`**, not `max(load_date)` — a run that dies mid-write leaves data
+files but never writes its ledger row, so a partial load is *structurally* unselectable rather
+than filtered out by a heuristic. Note 2026-08-04 already has **three loads in one day**, which
+is on its own enough to rule out a `load_date`-based rule.
+
+**The split null rule is now implemented, not just documented.** Wk 2 banked the finding; this
+session turned it into code in two places, because it has two distinct failure modes:
+- **`union_by_name=true`** on the source handles a column missing from *some* loads. Without
+  it DuckDB takes its schema from the first file it reads and **silently drops** any column
+  that appeared later — wrong data, not an error.
+- **`optional_column`** (`transform/macros/bronze.sql`) handles a column missing from *all*
+  loads, where the model just fails to compile. The tempting fix — delete the column — quietly
+  changes the schema every consumer reads. Instead it emits a typed NULL.
+
+**Four columns are in that state right now**, all because pre-season makes them null for every
+row: `fixtures.team_h_score`, `fixtures.team_a_score`, `elements.ep_this`,
+`elements.chance_of_playing_this_round`. All four appear on the first matchday — and Silver's
+shape will not move when they do.
+
+**A validation worth having: the game design checks out against the source.** The numbers in
+[`product/game-design.md`](product/game-design.md) §5 were written as spec constants; they now
+exist as *data* in `stg_fpl__game_settings`, read from FPL's own payload — **squad 15, lineup
+11, 3 per club, £100.0m budget, sell-on fee 0.5, form window 30 days.** All six agree.
+`assert_squad_rules_agree` keeps them agreeing: FPL states the squad rules **twice** (as
+per-position counts in `element_types`, as flat totals in `game_settings`) with nothing
+upstream guaranteeing consistency, and ADR-0018 says we mirror FPL rather than invent — so if
+those two drift, the game's validation and its stated budget stop describing the same game.
+
+**Three singular tests, each verified to actually fail when violated** (a test that cannot fail
+is worse than no test):
+
+| Test | Guards |
+|---|---|
+| `assert_silver_reads_one_committed_snapshot` | every model drew from the same, single, **committed** load |
+| `assert_optional_columns_are_typed` | the split-null-rule columns still exist **and** still carry their cast |
+| `assert_squad_rules_agree` | `element_types` and `game_settings` describe the same game |
+
+The first is the subtle one. Every model calls `latest_completed_load()` **independently at run
+time**, so a load committing *mid-build* would hand different models different snapshots —
+producing an internally inconsistent Silver layer (a player referencing a team that the teams
+model doesn't have yet) **without any single model looking wrong**. It is a race, so it will
+not reproduce on demand; that is exactly why it needs a test.
+
+**🔑 Two environment gotchas banked this session:**
+1. **This machine's OpenSSL has no `cert.pem`** (`/usr/local/etc/openssl@3/cert.pem` does not
+   exist), so any stdlib `ssl`/`urllib` call fails cert verification. pip bundles its own certs
+   and works; a source build that downloads at build time does not. Installing dbt needed
+   `export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")`. Anything else
+   on this Mac using raw `urllib` will hit the same wall — `requests`/`dlt` are fine (certifi).
+2. **DuckDB writes files but does not create directories.** The local Silver path fails with a
+   bare `IO Error: No such file or directory` until you `mkdir -p _local_silver`. S3 has no
+   such problem, so this only bites in local dev.
+
+**Typing is where FPL's real shape shows.** FPL sends decimals as **strings** (`form`,
+`ict_index`, the whole xG family, `selected_by_percent`). Silver casts with
+`nullif(trim(x), '')` to absorb FPL's `""`-for-empty habit, then a **plain `cast`, deliberately
+not `try_cast`** — if FPL ever puts something genuinely non-numeric in a numeric field this
+build should fail loudly and spend error budget (ADR-0012) rather than write NULLs that are
+indistinguishable from real absence.
+
+**🔐 GitHub Actions security review — done 2026-08-04, four fixes applied.** Reviewed all four
+workflows for log-masking and fork-PR exposure. **The two big things were already right:**
+there is **no `pull_request_target` and no `workflow_run` anywhere** (the "pwn request"
+vectors), and the OIDC trust is pinned to `repo:<repo>:ref:refs/heads/main` **plus** an `aud`
+check — so credential-bearing workflows are unreachable from a fork on two independent layers.
+Verified at the repo level too: `default_workflow_permissions = read`,
+`can_approve_pull_request_reviews = false`, secret scanning + push protection both on.
+
+Applied:
+1. **All 13 action references SHA-pinned** (were mutable tags). `configure-aws-credentials`
+   runs in jobs holding `id-token: write`, so a moved tag is credential theft, not a broken
+   build. Repo setting `sha_pinning_required` is **still `false`** — worth enabling now.
+2. **gitleaks is checksum-verified** against a hardcoded SHA256, downloaded to a file instead
+   of `curl | tar`. The point is subtle: this is the *scanner*, so a swapped binary still exits
+   0 and silently disables the secret scan. A checksums file fetched from the same release
+   would prove nothing — the integrity claim has to live in git.
+3. **The password's percent-encoded form is now masked too.** `::add-mask::` matches a
+   *literal* string, and assembling a DSN percent-encodes the value — the one transformation on
+   this job's real code path. (`PostgresTarget` already renders `***` via SQLAlchemy's URL
+   object, but that is one library's behaviour, not an invariant.) Worth remembering **why the
+   mask exists at all**: the password comes from SSM at run time, *not* GitHub's secret store,
+   so nothing masks it automatically.
+4. **`sweep` no longer aborts on the first failed revoke** — `set -e` meant one un-revokable
+   rule left **every remaining orphan open**. Now it revokes what it can and still exits 1.
+   **Verified before/after against a stubbed AWS CLI:** the committed version stopped at rule 1
+   of 3; the fixed version sweeps 2 and 3, reports the failure, exits 1.
+   `runbooks/orphaned-sg-rule.md` updated — a red janitor run is now usually *partial* success.
+
+**Two open items, both free toggles:** `secret_scanning_non_provider_patterns` and Dependabot
+security updates are **disabled**. And one to confirm: **dlt ships anonymous telemetry enabled
+by default** and there is no `.dlt/config.toml` anywhere, so the scheduled jobs are likely
+phoning home to dlthub with pipeline metadata — not secrets, but unannounced outbound data from
+an unattended job. Disable with `[runtime] dlthub_telemetry = false` once confirmed.
+
+**Toolchain:** dbt-core 1.12.0 + dbt-duckdb 1.10.1 + duckdb 1.5.5, pinned in
+`transform/requirements.txt`. `profiles.yml` is **committed** (it holds no secrets — S3 comes
+from `provider: credential_chain`, the same ambient-credential posture as ingest) and lives in
+`transform/`, which dbt checks before `~/.dbt`, so there is no per-machine setup. Generic-test
+args are nested under `arguments:` — dbt 1.12 deprecates the flat form and 2.0 removes it.
+
+<details><summary>Prior phase — Wk 2 complete, both Bronze pipelines live (2026-08-04)</summary>
 
 **✅ Wk 2 COMPLETE — both Bronze pipelines are LIVE in S3 (2026-08-04).** FPL→Bronze has run
 daily since 2026-08-01; Postgres→Bronze shipped this session, merged as PR #2 (`2a6b11d`,
@@ -345,8 +470,20 @@ delegable: **B6** (remote state, post-apply only).
 
 </details>
 
+</details>
+
 ## What exists
 
+- **`transform/`** — the Wk-3 dbt-duckdb project. 10 Silver models + 66 tests (63 schema, 3
+  singular), materialized as Parquet at `s3://<lake>/silver/`. Contract and the reasoning
+  behind both modelling rules: [`transform/README.md`](../transform/README.md).
+  - **Silver (FPL) — live**, first build 2026-08-04. `dbt build` green end-to-end.
+  - **Gold — not started.** The centrepiece marts (ADR-0013 `dim_identity_map`,
+    `mart_manager_360`) need app + PostHog data that does not exist yet; the FPL-only Gold that
+    *is* possible now is the next move.
+  - **No `bronze_postgres` source, and no `event_live`** — both are empty in the lake, and
+    DuckDB errors on a glob that matches zero files, so declaring either would be a broken
+    build rather than a placeholder. They land with the app layer / the first played gameweek.
 - **`ingest/`** — both Wk-2 Bronze pipelines. dlt sources + the pure gameweek-selection rule +
   **39 unit tests** + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
   contract Silver will read against (JSONL/gzip, Hive `load_date=` partition, nesting kept
@@ -397,39 +534,74 @@ delegable: **B6** (remote state, post-apply only).
 | **0020** (IAM authorization model) | ✅ Accepted — ratified 2026-07-03 (merged via PR #1). One role per compute identity; `tf-plan`/`tf-apply` CI split (Wk-2 Terraform follow-up); shared runtime exec role, split-on-divergence. |
 | **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
 | **0022** (public-repo strategy) | ✅ Accepted — ratified 2026-07-04. Stay public + build in public; Wk-5+ Jekyll Pages showcase layered on top (not a private-repo reveal); enabled by a secret/PII leakage gate before Wk 2 (B10). |
+| **0023** (Silver snapshot semantics) | 📝 **Proposed — awaiting ratification.** Silver takes every row of the latest *committed* Bronze load (dlt `_dlt_loads`, `status = 0`), not the latest observation per key: a removed entity must disappear rather than linger, and a partial load must be structurally unselectable. Governs every staging model, including the Postgres ones when they arrive. |
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Wk 2 is complete and live: both Bronze
-> pipelines are merged to `main` (`2a6b11d`), applied, and proven by run `30943706203`. CI is
-> green. **One loose end:** the `security-group-rule/*` IAM fix and this status update are
-> applied but **not yet committed** — see step 0 below.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver is built, tested and live in S3, and
+> the Actions hardening below is applied. The working tree is **uncommitted**. Two things need
+> the maintainer before Wk 3 continues.
 >
-> **0 — Commit the tail of Wk 2.** Terraform-only plus docs, so `git push` works from the CLI
-> (no `.github/` changes, so GitHub Desktop is not needed this time):
+> **0 — Commit, in two parts.** The bundle touches `.github/workflows/`, so **the push must go
+> through GitHub Desktop** (the CLI token lacks `workflow` scope). Commit from the **Terminal**
+> either way, so the `gitleaks` hook actually runs — **already verified passing** on every file
+> here:
 >
 > ```bash
 > cd ~/Documents/GitHub/just-for-fun
-> git add infra docs ingest
-> git commit    # then: git push
+> git add transform docs .gitignore          # Silver layer
+> git commit
+> git add .github                            # Actions hardening
+> git commit
+> # then push via GitHub Desktop
 > ```
 >
-> **The next real move is Wk 3 — Silver/Gold with dbt-duckdb.** Four things to carry into it:
+> **1 — Ratify or reject [ADR-0023](adr/0023-silver-snapshot-semantics.md)** (📝 Proposed). It
+> is already implemented, so a rejection means reworking every staging model — worth 10 minutes
+> now. The one-line version: *Silver takes a whole committed load, not the newest row per key,
+> so a deleted entity disappears instead of lingering forever.*
 >
-> 1. **Bronze holds FPL data only.** Both pipelines run, but Postgres loads 0 rows because the
->    app layer does not exist yet. The first Silver models have exactly one real source —
->    `bronze/fpl/` — and `bronze/postgres/` is a working pipe waiting for an app.
-> 2. **The split null rule** (see *Current phase*): a missing **column** means null; a missing
->    **key inside a JSONB payload** does not. Getting this backwards is a silent data bug, not
->    a failure, so encode it in a dbt test rather than a comment.
-> 3. **`ops.pipeline_runs` is still empty** — nothing writes to it yet. ADR-0012's SLIs and
->    ADR-0007's Fargate-overflow trip-wire both read from it, so Wk 3 is when the ingest jobs
->    should start writing a row per run. Note dlt warned that **`psutil` is not installed**, so
->    memory stats are unavailable — `peak_mem_mb` in the seed schema needs it. One line in
->    `ingest/requirements.txt`.
-> 4. **Read the Bronze contract before modelling**, in [`ingest/README.md`](../ingest/README.md):
->    JSONL/gzip, Hive `load_date=` partition, nesting kept inline, schema-qualified table names
->    on the Postgres side, `_dlt_load_id` as the "which run produced this" key.
+> **Then the next real move is the rest of Wk 3 — Gold, plus two carried-forward items.**
+>
+> 1. **Gold, FPL-only.** ADR-0013's centrepiece (`dim_identity_map`, `mart_manager_360`) is
+>    **blocked** — it needs app + PostHog data that does not exist. What is buildable now is a
+>    player/team/fixture analytical mart off the 10 Silver models: player value and form,
+>    fixture difficulty runs, position scarcity. Note Gold needs an explicit `location` in each
+>    model's own config block — `external_root` in `profiles.yml` is a single value per target
+>    and currently points at `silver/`.
+> 2. **`ops.pipeline_runs` is still empty** — nothing writes to it. ADR-0012's SLIs and
+>    ADR-0007's Fargate-overflow trip-wire both read from it, so the ingest **and** transform
+>    jobs should start writing a row per run. `psutil` is **already in
+>    `ingest/requirements.txt`** (so `peak_mem_mb` is fillable) — the writer is what is missing.
+>    `stg_fpl__loads` already exposes `load_started_at` + `loaded_at`, which is the duration
+>    half of the trip-wire for the ingest side.
+> 3. **The Postgres half of the split null rule is still untested** — a `null` *inside* a JSONB
+>    payload is preserved, so a missing key there is **meaningful** and must not be read as
+>    null. It is the opposite of the column rule and there is no data to test it against until
+>    the app layer writes a row. Write that test with the first `bronze_postgres` source.
+>
+> **⚠️ CI cannot run `dbt build` yet — this needs a Terraform apply (maintainer).** The
+> transform job has no AWS identity: `pitch-control-ingest` holds `s3:GetObject`/`PutObject` on
+> **`bronze/*` only**, which is correct for ingest and insufficient here — it cannot write
+> `silver/*`. Per ADR-0020 (one role per compute identity) the fix is a **new
+> `pitch-control-transform` role**: read `bronze/*`, write `silver/*` + `gold/*`, `main`-pinned.
+> Until that exists, `dbt build` is a local-only command and there is no `transform-check.yml`.
+> A PR-time check that needs **no** credentials (`dbt parse` / `dbt compile --empty`) is worth
+> having in the meantime, and would have caught the one real bug hit this session.
+>
+> 💡 **Two environment gotchas that will cost time if forgotten** (both in *Current phase*):
+> this Mac's OpenSSL has **no `cert.pem`**, so a source build that downloads at build time
+> fails cert verification until `SSL_CERT_FILE` points at certifi; and **DuckDB does not create
+> directories**, so local Silver needs `mkdir -p transform/_local_silver` first.
+>
+> 🔁 **Rebuilding Silver from scratch** is safe and takes ~14s — it is a full overwrite, and
+> Bronze retains every observation, so nothing is lost by re-running:
+>
+> ```bash
+> cd ~/Documents/GitHub/just-for-fun/transform && source .venv/bin/activate
+> export PITCH_CONTROL_LAKE_BUCKET=$(cd ../infra && terraform output -raw lake_bucket)
+> dbt build
+> ```
 >
 > **Watch for the first janitor run.** `sg-janitor.yml` fires daily at 07:00 UTC and should
 > find nothing. If it ever logs an `::warning::`, that is a real signal — the `always()` revoke
@@ -579,6 +751,10 @@ Skills being practiced deliberately, not just the app output:
   janitor and ADR-0019's SSM secret path. Postgres loads 0 rows until the app layer exists —
   the pipe works, the source is empty.
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
+  **Silver done 2026-08-04** — `transform/`, 10 models + 66 tests, Parquet live at
+  `s3://<lake>/silver/`, snapshot semantics recorded as ADR-0023 (📝 Proposed). **Remaining:**
+  Gold (FPL-only; the ADR-0013 identity marts are blocked on the app layer), `ops.pipeline_runs`
+  writes, and a CI path — which is gated on a new `pitch-control-transform` IAM role.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
 
