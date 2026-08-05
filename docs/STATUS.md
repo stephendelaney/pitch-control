@@ -99,7 +99,13 @@ Verified at the repo level too: `default_workflow_permissions = read`,
 Applied:
 1. **All 13 action references SHA-pinned** (were mutable tags). `configure-aws-credentials`
    runs in jobs holding `id-token: write`, so a moved tag is credential theft, not a broken
-   build. Repo setting `sha_pinning_required` is **still `false`** — worth enabling now.
+   build. **Proven on `main`** by janitor run
+   [`30965716847`](https://github.com/stephendelaney/pitch-control/actions/runs/30965716847):
+   GitHub echoed `(SHA:3d3c42e5…)` / `(SHA:e6de0542…)`, OIDC still assumed the role through the
+   pinned action, and the sweep returned `nothing to sweep`. That was the real risk of pinning —
+   a wrong SHA fails at *run* time, not at parse time.
+   ⚠️ Only `checkout` + `configure-aws-credentials` have run pinned so far; `setup-python`
+   (ingest) and `setup-terraform` (terraform-check) are still unexercised.
 2. **gitleaks is checksum-verified** against a hardcoded SHA256, downloaded to a file instead
    of `curl | tar`. The point is subtle: this is the *scanner*, so a swapped binary still exits
    0 and silently disables the secret scan. A checksums file fetched from the same release
@@ -116,11 +122,36 @@ Applied:
    of 3; the fixed version sweeps 2 and 3, reports the failure, exits 1.
    `runbooks/orphaned-sg-rule.md` updated — a red janitor run is now usually *partial* success.
 
-**Two open items, both free toggles:** `secret_scanning_non_provider_patterns` and Dependabot
-security updates are **disabled**. And one to confirm: **dlt ships anonymous telemetry enabled
-by default** and there is no `.dlt/config.toml` anywhere, so the scheduled jobs are likely
-phoning home to dlthub with pipeline metadata — not secrets, but unannounced outbound data from
-an unattended job. Disable with `[runtime] dlthub_telemetry = false` once confirmed.
+**❌ `secret_scanning_non_provider_patterns` is NOT a free toggle — do not retry the API.**
+Tried 2026-08-04: `PATCH /repos/{owner}/{repo}` with
+`security_and_analysis.secret_scanning_non_provider_patterns.status = enabled` returns
+**HTTP 200 with no error, and the value stays `disabled`** — GitHub accepts the field and
+silently ignores it. Confirmed with a fresh `GET`, twice. This is an **entitlement** boundary
+presenting as a successful call: public repos get secret scanning + push protection free, but
+those cover **provider** patterns (recognisable shapes — AWS keys, GitHub tokens); the
+generic-pattern engine is part of paid **Secret Protection**.
+
+**We are not meaningfully exposed by this, which is why it is closed rather than parked.** The
+category it covers — private keys, connection strings, password-shaped strings — is already
+caught in two places the GitHub setting cannot reach: `detect-private-key` in
+`.pre-commit-config.yaml` runs *before the commit exists*, and the CI `gitleaks` job runs its
+generic rules over **full history** (`fetch-depth: 0`), not just new pushes. The only real gap
+is a server-side catch for generic patterns when the hook is bypassed with `--no-verify`, and
+on a solo repo that is the maintainer. Provider-pattern push protection already covers the
+higher-severity half. *(`secret_scanning_validity_checks` is the same story — same product.)*
+
+**Still genuinely open, and genuinely free: Dependabot.** Security updates are `disabled`, and
+there is no `.github/dependabot.yml`. The second one is now load-bearing rather than optional:
+SHA pins do not move, so the fix above traded "a tag might change under me" for "my actions go
+stale, including security fixes." A `dependabot.yml` with `package-ecosystem: github-actions`
+is what collects that debt — it understands SHA pins specifically, bumping the SHA *and*
+rewriting the `# v7` comment as a reviewable PR. Add the `pip` ecosystems for `ingest/` and
+`transform/` at the same time.
+
+**One to confirm: dlt ships anonymous telemetry enabled by default** and there is no
+`.dlt/config.toml` anywhere, so the scheduled jobs are likely phoning home to dlthub with
+pipeline metadata — not secrets, but unannounced outbound data from an unattended job. Disable
+with `[runtime] dlthub_telemetry = false` once confirmed.
 
 **Toolchain:** dbt-core 1.12.0 + dbt-duckdb 1.10.1 + duckdb 1.5.5, pinned in
 `transform/requirements.txt`. `profiles.yml` is **committed** (it holds no secrets — S3 comes
@@ -538,23 +569,38 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver is built, tested and live in S3, and
-> the Actions hardening below is applied. The working tree is **uncommitted**. Two things need
-> the maintainer before Wk 3 continues.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver is live in S3 and the Actions
+> hardening is applied; **both are committed and pushed** — `753459c` (Silver) and `1d0969c`
+> (CI hardening), `origin/main` clean. Only this STATUS correction is uncommitted.
 >
-> **0 — Commit, in two parts.** The bundle touches `.github/workflows/`, so **the push must go
-> through GitHub Desktop** (the CLI token lacks `workflow` scope). Commit from the **Terminal**
-> either way, so the `gitleaks` hook actually runs — **already verified passing** on every file
-> here:
+> **0 — Two repo settings, in this order.**
+>
+> **(a) Enable `sha_pinning_required` — now unblocked and safe.** The ordering hazard is gone:
+> `main` carries the pins and janitor run `30965716847` proved OIDC still works through them.
+> Note this is a `PUT` that *replaces* the object, so all three fields are required — dropping
+> the other two would silently reset your Actions policy:
 >
 > ```bash
-> cd ~/Documents/GitHub/just-for-fun
-> git add transform docs .gitignore          # Silver layer
-> git commit
-> git add .github                            # Actions hardening
-> git commit
-> # then push via GitHub Desktop
+> gh api -X PUT repos/stephendelaney/pitch-control/actions/permissions --input - <<'JSON'
+> {"enabled":true,"allowed_actions":"all","sha_pinning_required":true}
+> JSON
 > ```
+>
+> Only `checkout` + `configure-aws-credentials` have run pinned so far. `setup-terraform` gets
+> exercised by the next push (`terraform-check` has no `workflow_dispatch`, so a push is the
+> only trigger) and `setup-python` by the 06:00 ingest run. Enabling before those is low risk —
+> same API resolution — but that is where a surprise would appear.
+>
+> **(b) Dependabot — now load-bearing, not optional.** SHA pins do not move, so (a) trades "a
+> tag might change under me" for "my actions go stale, including security fixes." Add
+> `.github/dependabot.yml` with `package-ecosystem: github-actions` (it understands SHA pins —
+> bumps the SHA *and* rewrites the `# v7` comment as a reviewable PR), plus `pip` for `ingest/`
+> and `transform/`. Enable `dependabot_security_updates` too; it is a separate thing (vulnerable
+> dependencies, not version bumps) and also free.
+>
+> **Do not retry `secret_scanning_non_provider_patterns` — closed, not deferred.** See *Current
+> phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
+> `detect-private-key` already cover the category.
 >
 > **1 — Ratify or reject [ADR-0023](adr/0023-silver-snapshot-semantics.md)** (📝 Proposed). It
 > is already implemented, so a rejection means reworking every staging model — worth 10 minutes
