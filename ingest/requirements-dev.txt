@@ -3,4 +3,4 @@
 # Test-only. The gameweek-selection logic is pure and deterministic, so it is unit-tested
 # against fixtures rather than against the live FPL API (ADR-0011: the source is unofficial
 # and contract-unstable — tests must not depend on it being up, or on what week it is).
-pytest==8.4.2
+pytest==9.1.1
