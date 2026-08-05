@@ -704,10 +704,16 @@ delegable: **B6** (remote state, post-apply only).
 > `dependabot_security_updates` `enabled`, `dependabot.yml` live, **`main` branch-protected**,
 > **ADR-0023 ratified ✅**, and all four SHA-pinned actions now proven at run time.
 >
-> Start with the two short items below (**0** and **1**), then the real work is the CI gap.
+> **The dependency queue is empty and the vulnerability alert is fixed.** #3 closed as a
+> duplicate, #5/#6/#7 merged — `psycopg2-binary==2.9.12`, `psutil==7.2.2`, `pytest==9.1.1` on
+> `main`, GHSA-6w46-j5rx-g56g `fixed`. Dependabot re-ran all three ecosystems afterwards and
+> opened nothing, so every pin in the repo is current as of 2026-08-05 — including the four
+> action SHAs.
 >
-> **✅ Shipped 2026-08-05 — `main` is `4cfb7ec`** (merge of PR #4, `wk3-gold`). Post-merge
-> `terraform-check` green (run
+> **So there is one short item below (ratify ADR-0024), and then the real work is the CI gap.**
+>
+> **✅ Shipped 2026-08-05 — `main` is `d5cee63`** (PRs #4 `wk3-gold` and #8 docs/wrap).
+> Post-merge `terraform-check` green (run
 > [`31004346219`](https://github.com/stephendelaney/pitch-control/actions/runs/31004346219)).
 > Gold, `.github/dependabot.yml` and the ADRs are all on `main`; the branch is deleted both
 > sides and the local clone is cleaned up. **Nothing from this session is outstanding.**
@@ -749,21 +755,20 @@ delegable: **B6** (remote state, post-apply only).
 > phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
 > `detect-private-key` already cover the category.
 >
-> **0 — Triage the Dependabot queue (4 open PRs, ~10 minutes).** The first config-driven pass
-> ran all three ecosystems, and the *absence* of PRs is the informative part:
-> **`github_actions` found nothing to bump — the four SHA pins are already current**, which is
-> the first independent evidence that pinning has not quietly frozen the repo on stale actions.
-> `pip in /transform` likewise (dbt-core 1.12.0 / dbt-duckdb 1.10.1 / duckdb 1.5.5 are latest).
-> Only `ingest/` produced work: **#5** psycopg2-binary, **#6** pytest, **#7** psutil — exactly
-> the `open-pull-requests-limit: 3`.
+> 📌 **Two Dependabot behaviours learned on the first pass, worth not re-deriving.**
 >
-> ⚠️ **#3 is a duplicate of #6** — both bump pytest *from 8.4.2*, #3 to 9.0.3 and #6 to 9.1.1.
-> They did not dedupe because they come from different Dependabot paths: **#3 from
-> `dependabot_security_updates`** (dependency graph, no config file) and **#6 from
-> `dependabot.yml`**. Close #3, merge #6. This also explains why four PRs are open against a
-> limit of three — security PRs do not count toward the version-update limit.
+> 1. **Security PRs and version PRs are different pipelines and do not dedupe.** #3 (pytest
+>    → 9.0.3, the *minimum* patched version) came from `dependabot_security_updates`, which
+>    reads the dependency graph and needs no config file; #6 (→ 9.1.1) came from
+>    `dependabot.yml`. Both bumped pytest *from 8.4.2* and neither closed the other. The tell is
+>    the commit prefix — the config sets `deps(ingest)`, so a `chore(deps-dev)` PR is
+>    security-path. Security PRs also do **not** count against
+>    `open-pull-requests-limit`, which is why four were open against a limit of three.
+> 2. **A saturated limit silently blocks new PRs.** While #5/#6/#7 sat open, no further
+>    version-update PR could be raised — a dlt or dbt bump would simply not have appeared. Clear
+>    the queue rather than letting it sit.
 >
-> **1 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
+> **0 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
 > at your suggestion). Like 0023 it is already implemented, so a rejection means reworking
 > `fct_team_fixture` and `mart_team_fixture_run`. The one-line version: *Gold models carry the
 > grain the question has, not the source's — a two-sided fact is unpivoted to one row per
