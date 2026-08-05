@@ -1,9 +1,115 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-08-04** (Wk 3, Silver).
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-05** (Wk 3, Gold).
 
 ## Current phase
+
+**✅ Wk 3 SUBSTANTIALLY DONE — Gold is LIVE in the lake (2026-08-05).** `transform/` now builds
+both layers: **16 models + 148 tests, `dbt build` green end-to-end against live Bronze in ~37s**,
+with **6 new Parquet files (155 KB) at `s3://pitch-control-lake-749614773761/gold/`**.
+
+```
+dim_player               568 rows   player            who / what do they cost / can I pick them
+dim_team                  20        club              strength, table, squad depth + price range
+fct_team_fixture         760        team x fixture    the season from both dugouts
+mart_team_fixture_run    760        team x gameweek   difficulty + rolling 5-gameweek outlook
+mart_player_value        568        player            points/£m, rank in position, next five
+mart_position_scarcity     4        position          supply, price floor, cost of a legal squad
+```
+
+This is the **FPL-only** Gold. ADR-0013's centrepiece (`dim_identity_map`, `mart_manager_360`)
+is still blocked on app + PostHog data — everything here is about players, clubs and fixtures,
+and nothing about *managers*, because there are no managers yet.
+
+**🔴 The finding of this session, and it is a trap rather than a bug: pre-season, FPL's points
+are *last season's*, and nothing in the payload says so.** The natural assumption — that a
+pre-season lake has zeroes in the scoring columns, the way `event_live` correctly loads no rows
+— is wrong. Measured against the live lake: **zero gameweeks are finished, and yet 400 of 568
+players carry non-zero `total_points`, with a maximum of 38 `starts` and 3,420 `minutes`** — a
+full 38-game season. FPL keeps the prior season's aggregates in `bootstrap-static` until it
+resets them shortly before GW1.
+
+That is **worse than zeroes**, because zeroes are obviously unusable and these numbers look
+perfectly usable. And they hang off the player's **current** club: Semenyo shows 3,200 minutes
+and 202 points against MCI, none of which he played there. Any team-level roll-up is wrong in a
+way no test on the mart can detect, because every individual value is valid.
+
+So `mart_player_value.points_are_prior_season` labels it, derived from **evidence** — a player
+has minutes while no gameweek has been played, which cannot happen inside one season — and
+deliberately *not* from FPL's flags (all three are false pre-season) or from the calendar (the
+reset moment is unannounced, so a date rule is wrong for that window). **`form` is the tell:**
+it is a 30-day rolling window, so it expires rather than carries over, and a payload where
+`form` is empty for all 568 while `total_points` is not is a payload straddling two seasons.
+
+**Two modelling decisions carry the layer, and both exist to stop a future "simplification".**
+
+1. **Fixtures have two sides, so the grain says so.** Silver's fixture row is
+   `team_h`/`team_a`, `team_h_difficulty`/`team_a_difficulty` — faithful to FPL and wrong for
+   every question anyone actually asks, which are all team-shaped. `fct_team_fixture` unpivots
+   to **760 rows**, turning "their next five" into `where team_id = ?`. The price is stating the
+   mapping twice, which is exactly what `assert_fixture_sides_balance` checks.
+2. **A blank gameweek is a *missing row*, and a `rows` window frame cannot see it.**
+   `mart_team_fixture_run` **cross joins teams × gameweeks before touching a fixture**, so its
+   `rows between current row and 4 following` frame counts gameweeks by construction. Group
+   `fct_team_fixture` instead — which looks identical and passes every other test — and a team
+   with a blank has no row, so their window silently spans **six** real gameweeks while everyone
+   else's spans five, producing plausible 1-5 averages throughout. **There are no blanks or
+   doubles in the current fixture list**, which is precisely why it is written down: the bug is
+   unreachable today and arrives with the first cup-tie reschedule.
+
+**Four new singular tests, each verified to fail when violated** — falsified by breaking the
+model, not by trusting the SQL:
+
+| Test | Guards | Falsified by |
+|---|---|---|
+| `assert_fixture_sides_balance` | the two sides agree on opponents, difficulty, goals | one mis-copied line in the away branch → **271 of 380** failed |
+| `assert_fixture_run_grid_is_complete` | 20 × 38, no gaps | dropping GW20 from the grid → 21 failed |
+| `assert_minimum_squad_fits_budget` | a legal squad is buyable, with room to choose | summing the *dearest* fill → £125m vs a £100m budget |
+| `assert_prior_season_points_are_flagged` | the provenance label matches the evidence | hardcoding the flag `false` |
+
+The first one's number is the interesting part: the other **109 fixtures happen to have equal
+difficulty on both sides**, so a mis-copy is genuinely invisible there. That is the argument for
+the test in one statistic.
+
+**A game-design invariant now runs in CI-shaped form.** `assert_minimum_squad_fits_budget`
+reads like a product test and is also a data test: FPL forces 2/5/5/3 inside £100.0m, and the
+cheapest legal squad currently costs **£64.0m, leaving £36.0m discretionary** — the headroom
+that makes the game a game. Both sides move independently and neither is ours (prices rise all
+season; the cheap end thins as FPL removes departed players; the budget is FPL's published
+value). ADR-0018 says we mirror rather than invent, so a drift into contradiction should fail
+the build rather than publish a mart describing an unplayable game.
+
+**🔑 Three mechanical gotchas banked:**
+1. **Gold's write path has to be per-model.** `external_root` in `profiles.yml` is one value per
+   target and points at `silver/`, so each Gold model calls
+   `{{ config(location=gold_location()) }}` in its own header. A `+location` in
+   `dbt_project.yml` **cannot** work: dbt renders the project file at load, *before user macros
+   are registered* (it fails outright with `'gold_location' is undefined`) and with no `this` in
+   scope to name the file — so all six models would collide on one path even if it resolved.
+2. **`sum()` in a window silently demotes an integer to a float in Parquet.** DuckDB widens
+   `sum()` over a bigint to HUGEINT, Parquet has no 128-bit integer, and dbt-duckdb resolves
+   that by writing a **double** — so a fixture count arrived as `5.0`. Cosmetic here; not
+   cosmetic once a column can exceed 2^53. Cast at the point of widening.
+3. **`strength_attack_*` and `strength_defence_*` are 0 for all 20 clubs** — only
+   `strength_overall_home/away` is populated pre-season. Kept rather than dropped, for the
+   `optional_column` reason: a dashboard on a schema that gains columns in September breaks in
+   September. Related: **`home_advantage` was renamed `home_away_strength_delta`** because the
+   data contradicts the name — it is 0 for twelve clubs and −1 for eight, **never positive**.
+
+**One dependency decision, deliberately deferred.** `unique_combination_of_columns` is a
+project-local generic test (`macros/generic_tests.sql`), name-compatible with the dbt_utils test
+of the same name. `fct_team_fixture` has no single unique column — `fixture_id` appears twice by
+design — so composite grain needed *something*, and pulling in the project's first dbt package
+plus a `dbt deps` step and a hub fetch in CI to get one twelve-line macro is not yet a trade
+worth making. When a second or third dbt_utils test is genuinely wanted, take the package and
+delete the file.
+
+**📄 `.github/dependabot.yml` is written** (STATUS next-action 0b) — `github-actions` at the
+root plus `pip` for `ingest/` and `transform/`, weekly, 3 open PRs per ecosystem. **Not yet
+pushed, and the `dependabot_security_updates` repo toggle is separate and still off.**
+
+<details><summary>Prior phase — Wk 3, Silver live in S3 (2026-08-04)</summary>
 
 **▶️ Wk 3 STARTED — Silver is LIVE in the lake (2026-08-04).** `transform/` is a working
 dbt-duckdb project: **10 models + 66 tests, `dbt build` green against live Bronze**, and
@@ -503,15 +609,21 @@ delegable: **B6** (remote state, post-apply only).
 
 </details>
 
+</details>
+
 ## What exists
 
-- **`transform/`** — the Wk-3 dbt-duckdb project. 10 Silver models + 66 tests (63 schema, 3
-  singular), materialized as Parquet at `s3://<lake>/silver/`. Contract and the reasoning
-  behind both modelling rules: [`transform/README.md`](../transform/README.md).
-  - **Silver (FPL) — live**, first build 2026-08-04. `dbt build` green end-to-end.
-  - **Gold — not started.** The centrepiece marts (ADR-0013 `dim_identity_map`,
-    `mart_manager_360`) need app + PostHog data that does not exist yet; the FPL-only Gold that
-    *is* possible now is the next move.
+- **`transform/`** — the Wk-3 dbt-duckdb project. **16 models + 148 tests** (141 schema, 7
+  singular), materialized as Parquet at `s3://<lake>/silver/` and `s3://<lake>/gold/`. All the
+  reasoning — both Silver rules, both Gold ones, the prior-season-points trap, and the
+  falsification result for every singular test: [`transform/README.md`](../transform/README.md).
+  - **Silver (FPL) — live**, first build 2026-08-04. 10 staging models.
+  - **Gold (FPL) — live**, first build 2026-08-05. 6 models: `dim_player`, `dim_team`,
+    `fct_team_fixture`, `mart_team_fixture_run`, `mart_player_value`,
+    `mart_position_scarcity`.
+  - **The identity marts are still blocked** — ADR-0013's `dim_identity_map` and
+    `mart_manager_360` need app + PostHog data that does not exist. Gold covers players, clubs
+    and fixtures; nothing about *managers*, because there are none.
   - **No `bronze_postgres` source, and no `event_live`** — both are empty in the lake, and
     DuckDB errors on a glob that matches zero files, so declaring either would be a broken
     build rather than a placeholder. They land with the app layer / the first played gameweek.
@@ -569,9 +681,20 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver is live in S3 and the Actions
-> hardening is applied; **both are committed and pushed** — `753459c` (Silver) and `1d0969c`
-> (CI hardening), `origin/main` clean. Only this STATUS correction is uncommitted.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary.** Silver *and* Gold are live in S3 and
+> `dbt build` is green (16 models, 148 tests). **This session's work is uncommitted** — the
+> Gold layer, `.github/dependabot.yml`, the `.gitignore` entry, `transform/README.md` and this
+> file. Everything before it is on `origin/main` (`be4ea2a`).
+>
+> **Commit it first** (Terminal, so `gitleaks` runs — see the note at the foot of this block).
+> `.github/dependabot.yml` is inside `.github/`, so **push this bundle via GitHub Desktop**:
+>
+> ```bash
+> cd ~/Documents/GitHub/just-for-fun
+> git checkout -b wk3-gold
+> git add transform/ docs/STATUS.md .github/dependabot.yml .gitignore
+> git commit -m "feat(transform): Wk3 — Gold layer (FPL-only) + dependabot"
+> ```
 >
 > **0 — Two repo settings, in this order.**
 >
@@ -591,12 +714,22 @@ delegable: **B6** (remote state, post-apply only).
 > only trigger) and `setup-python` by the 06:00 ingest run. Enabling before those is low risk —
 > same API resolution — but that is where a surprise would appear.
 >
-> **(b) Dependabot — now load-bearing, not optional.** SHA pins do not move, so (a) trades "a
-> tag might change under me" for "my actions go stale, including security fixes." Add
-> `.github/dependabot.yml` with `package-ecosystem: github-actions` (it understands SHA pins —
-> bumps the SHA *and* rewrites the `# v7` comment as a reviewable PR), plus `pip` for `ingest/`
-> and `transform/`. Enable `dependabot_security_updates` too; it is a separate thing (vulnerable
-> dependencies, not version bumps) and also free.
+> **(b) Dependabot — the file is written, the toggle is not flipped.**
+> `.github/dependabot.yml` now exists (`github-actions` at the root + `pip` for `ingest/` and
+> `transform/`, weekly, 3 open PRs each) and takes effect **as soon as it is on `main`** — this
+> is the half that collects the debt SHA-pinning created, since a pin never moves and stale
+> actions include stale security fixes. Dependabot understands SHA pins specifically: it bumps
+> the SHA *and* rewrites the `# v7` comment beside it.
+>
+> `dependabot_security_updates` is a **separate** free feature (vulnerable dependencies, not
+> version bumps) and is still `disabled`:
+>
+> ```bash
+> gh api -X PUT repos/stephendelaney/pitch-control/vulnerability-alerts
+> gh api -X PUT repos/stephendelaney/pitch-control/automated-security-fixes
+> ```
+>
+> Expect the first Monday batch to be noisy, then quiet.
 >
 > **Do not retry `secret_scanning_non_provider_patterns` — closed, not deferred.** See *Current
 > phase*: the API returns 200 and ignores it. It needs paid Secret Protection, and gitleaks +
@@ -607,45 +740,65 @@ delegable: **B6** (remote state, post-apply only).
 > now. The one-line version: *Silver takes a whole committed load, not the newest row per key,
 > so a deleted entity disappears instead of lingering forever.*
 >
-> **Then the next real move is the rest of Wk 3 — Gold, plus two carried-forward items.**
+> **2 — Consider an ADR for the Gold grain decisions, or explicitly decline one.** Two choices
+> in this session are the kind that a later session will "simplify" without knowing why they are
+> there: the **team × fixture unpivot**, and the **cross-join grid** that makes a `rows` window
+> frame count gameweeks rather than fixtures. Both are currently defended only by a test and a
+> comment, which is *probably* enough — they are modelling consequences of ADR-0003/0013 rather
+> than new architectural bets, and the house rule reserves ADRs for significant decisions. Worth
+> five minutes to decide deliberately rather than by omission.
 >
-> 1. **Gold, FPL-only.** ADR-0013's centrepiece (`dim_identity_map`, `mart_manager_360`) is
->    **blocked** — it needs app + PostHog data that does not exist. What is buildable now is a
->    player/team/fixture analytical mart off the 10 Silver models: player value and form,
->    fixture difficulty runs, position scarcity. Note Gold needs an explicit `location` in each
->    model's own config block — `external_root` in `profiles.yml` is a single value per target
->    and currently points at `silver/`.
-> 2. **`ops.pipeline_runs` is still empty** — nothing writes to it. ADR-0012's SLIs and
+> **Then the rest of Wk 3 — two carried-forward items, both unblocked.**
+>
+> 1. **`ops.pipeline_runs` is still empty** — nothing writes to it. ADR-0012's SLIs and
 >    ADR-0007's Fargate-overflow trip-wire both read from it, so the ingest **and** transform
 >    jobs should start writing a row per run. `psutil` is **already in
 >    `ingest/requirements.txt`** (so `peak_mem_mb` is fillable) — the writer is what is missing.
 >    `stg_fpl__loads` already exposes `load_started_at` + `loaded_at`, which is the duration
 >    half of the trip-wire for the ingest side.
-> 3. **The Postgres half of the split null rule is still untested** — a `null` *inside* a JSONB
+> 2. **The Postgres half of the split null rule is still untested** — a `null` *inside* a JSONB
 >    payload is preserved, so a missing key there is **meaningful** and must not be read as
 >    null. It is the opposite of the column rule and there is no data to test it against until
 >    the app layer writes a row. Write that test with the first `bronze_postgres` source.
 >
-> **⚠️ CI cannot run `dbt build` yet — this needs a Terraform apply (maintainer).** The
-> transform job has no AWS identity: `pitch-control-ingest` holds `s3:GetObject`/`PutObject` on
-> **`bronze/*` only**, which is correct for ingest and insufficient here — it cannot write
-> `silver/*`. Per ADR-0020 (one role per compute identity) the fix is a **new
-> `pitch-control-transform` role**: read `bronze/*`, write `silver/*` + `gold/*`, `main`-pinned.
-> Until that exists, `dbt build` is a local-only command and there is no `transform-check.yml`.
+> **⚠️ CI still cannot run `dbt build` — this needs a Terraform apply (maintainer), and it is
+> now the biggest single gap in Wk 3.** The transform job has no AWS identity:
+> `pitch-control-ingest` holds `s3:GetObject`/`PutObject` on **`bronze/*` only**, which is
+> correct for ingest and insufficient here — it cannot write `silver/*` **or `gold/*`**. Per
+> ADR-0020 (one role per compute identity) the fix is a **new `pitch-control-transform` role**:
+> read `bronze/*`, write `silver/*` + `gold/*`, `main`-pinned. Until that exists, `dbt build` is
+> a local-only command and there is no `transform-check.yml` — **16 models and 148 tests are
+> currently guarded by nothing but the maintainer remembering to run them.**
+>
 > A PR-time check that needs **no** credentials (`dbt parse` / `dbt compile --empty`) is worth
-> having in the meantime, and would have caught the one real bug hit this session.
+> having in the meantime and is a few lines of workflow. Note it would *not* have caught this
+> session's real problems: both were wrong claims about live data (points that turned out to be
+> last season's; strength ratings that turned out to be zero), which only a build against the
+> lake can surface.
 >
 > 💡 **Two environment gotchas that will cost time if forgotten** (both in *Current phase*):
 > this Mac's OpenSSL has **no `cert.pem`**, so a source build that downloads at build time
 > fails cert verification until `SSL_CERT_FILE` points at certifi; and **DuckDB does not create
-> directories**, so local Silver needs `mkdir -p transform/_local_silver` first.
+> directories**, so a local build needs `mkdir -p transform/_local_silver transform/_local_gold`
+> first.
 >
-> 🔁 **Rebuilding Silver from scratch** is safe and takes ~14s — it is a full overwrite, and
-> Bronze retains every observation, so nothing is lost by re-running:
+> 🔁 **Rebuilding both layers from scratch** is safe and takes ~37s against S3 — it is a full
+> overwrite, and Bronze retains every observation, so nothing is lost by re-running:
 >
 > ```bash
 > cd ~/Documents/GitHub/just-for-fun/transform && source .venv/bin/activate
 > export PITCH_CONTROL_LAKE_BUCKET=$(cd ../infra && terraform output -raw lake_bucket)
+> dbt build
+> ```
+>
+> To iterate on a model against real Bronze **without touching S3** — read the lake, write
+> Parquet to local disk:
+>
+> ```bash
+> cd ~/Documents/GitHub/just-for-fun/transform && source .venv/bin/activate
+> mkdir -p _local_silver _local_gold
+> unset PITCH_CONTROL_LAKE_BUCKET
+> export PITCH_CONTROL_BRONZE_LOCAL=s3://pitch-control-lake-749614773761/bronze/fpl
 > dbt build
 > ```
 >
@@ -797,10 +950,11 @@ Skills being practiced deliberately, not just the app output:
   janitor and ADR-0019's SSM secret path. Postgres loads 0 rows until the app layer exists —
   the pipe works, the source is empty.
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
-  **Silver done 2026-08-04** — `transform/`, 10 models + 66 tests, Parquet live at
-  `s3://<lake>/silver/`, snapshot semantics recorded as ADR-0023 (📝 Proposed). **Remaining:**
-  Gold (FPL-only; the ADR-0013 identity marts are blocked on the app layer), `ops.pipeline_runs`
-  writes, and a CI path — which is gated on a new `pitch-control-transform` IAM role.
+  **Silver done 2026-08-04, Gold done 2026-08-05** — `transform/`, 16 models + 148 tests,
+  Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
+  ADR-0023 (📝 Proposed). **Remaining:** `ops.pipeline_runs` writes, and a CI path — gated on a
+  new `pitch-control-transform` IAM role. The ADR-0013 identity marts stay blocked on the app
+  layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
 

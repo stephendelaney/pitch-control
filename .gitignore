@@ -54,6 +54,8 @@ tmp/
 _local_bronze/
 # The same, one layer up: where `dbt build` writes Silver Parquet when the lake bucket is unset.
 _local_silver/
+# And Gold. `gold_location()` falls back here on the same switch.
+_local_gold/
 
 # Node / frontend
 node_modules/

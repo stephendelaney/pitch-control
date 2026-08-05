@@ -1,0 +1,61 @@
+# Dependabot — the other half of SHA-pinning the workflows.
+#
+# All 13 action references were pinned to commit SHAs on 2026-08-04, because
+# `configure-aws-credentials` runs in jobs holding `id-token: write`: a moved tag there is
+# credential theft, not a broken build. That fix trades one risk for another — a SHA never
+# moves, so the actions now go stale silently, security fixes included.
+#
+# This file is what collects that debt. Dependabot understands SHA pins specifically: it bumps
+# the SHA *and* rewrites the `# v7` comment beside it, as a reviewable PR rather than a silent
+# change. That is the property that makes pinning sustainable instead of just deferred.
+#
+# `open-pull-requests-limit` is deliberately small on every ecosystem. This is a
+# single-maintainer repo and a Monday morning with eleven dependency PRs gets handled by
+# ignoring all eleven.
+
+version: 2
+
+updates:
+  # ── GitHub Actions ────────────────────────────────────────────────────────────────────────
+  # The load-bearing one. Four distinct actions across four workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions
+
+  # ── Python: ingest ────────────────────────────────────────────────────────────────────────
+  # dlt and its S3/Postgres extras. Runs on a schedule against real credentials, so a
+  # vulnerable transitive dependency here is not theoretical.
+  - package-ecosystem: pip
+    directory: /ingest
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(ingest)"
+    labels:
+      - dependencies
+      - python
+
+  # ── Python: transform ─────────────────────────────────────────────────────────────────────
+  # dbt-core + dbt-duckdb + duckdb, version-pinned in transform/requirements.txt. These three
+  # move together and break each other; a PR per bump is exactly the reviewable unit wanted.
+  - package-ecosystem: pip
+    directory: /transform
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(transform)"
+    labels:
+      - dependencies
+      - python

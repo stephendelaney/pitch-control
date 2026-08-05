@@ -1,7 +1,7 @@
 # `transform/` — Silver/Gold with dbt-duckdb (Wk 3)
 
-dbt models that turn Bronze into a typed, conformed, tested Silver layer in the lake.
-**All business logic lives here** — Bronze stays source-faithful
+dbt models that turn Bronze into a typed, conformed, tested Silver layer in the lake, and Silver
+into analytical Gold. **All business logic lives here** — Bronze stays source-faithful
 ([ADR-0003](../docs/adr/0003-s3-parquet-medallion-lake.md)), so anything that renames, types,
 deduplicates or joins is a model in this directory.
 
@@ -10,7 +10,7 @@ deduplicates or joins is a model in this directory.
 | Tool | dbt-core + `dbt-duckdb` ([ADR-0005](../docs/adr/0005-dbt-transformations.md)) |
 | Engine | DuckDB, in-process, no standing warehouse ([ADR-0004](../docs/adr/0004-duckdb-warehouse-engine.md)) |
 | Reads | `s3://<lake>/bronze/fpl/**.jsonl.gz` |
-| Writes | `s3://<lake>/silver/<model>.parquet` |
+| Writes | `s3://<lake>/silver/<model>.parquet`, `s3://<lake>/gold/<model>.parquet` |
 | Identity | Ambient credential chain — OIDC in CI, the maintainer's IAM profile locally |
 
 ## Run it
@@ -21,7 +21,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 export PITCH_CONTROL_LAKE_BUCKET=$(cd ../infra && terraform output -raw lake_bucket)
-dbt build                            # 10 models + 66 tests
+dbt build                            # 16 models + 148 tests, ~37s against S3
 ```
 
 `PITCH_CONTROL_LAKE_BUCKET` is the same single switch the ingest layer uses, with the same
@@ -33,7 +33,7 @@ path. It exists for the case that comes up constantly while developing a model: 
 lake, write Parquet to local disk, touch nothing in S3.
 
 ```bash
-mkdir -p _local_silver          # DuckDB writes files, it does not create directories
+mkdir -p _local_silver _local_gold   # DuckDB writes files, it does not create directories
 unset PITCH_CONTROL_LAKE_BUCKET
 export PITCH_CONTROL_BRONZE_LOCAL=s3://<lake>/bronze/fpl
 dbt build
@@ -46,9 +46,12 @@ checks the working directory before `~/.dbt`), and gets its S3 access from
 
 ## What lands
 
-`s3://<lake>/silver/<model>.parquet` — one file per model, overwritten in full on every build.
-Full-rebuild rather than incremental is ADR-0003's stated posture for an object store with no
-table format: it is idempotent, and at this size (163 KB total) there is nothing to optimise.
+`s3://<lake>/silver/<model>.parquet` and `s3://<lake>/gold/<model>.parquet` — one file per
+model, overwritten in full on every build. Full-rebuild rather than incremental is ADR-0003's
+stated posture for an object store with no table format: it is idempotent, and at this size
+(318 KB across both layers) there is nothing to optimise.
+
+### Silver — conform (163 KB)
 
 | Model | Rows | Source |
 |---|---:|---|
@@ -63,9 +66,27 @@ table format: it is idempotent, and at this size (163 KB total) there is nothing
 | `stg_fpl__positions` | 4 | `element_types` |
 | `stg_fpl__game_settings` | 1 | `game_meta` |
 
+### Gold — decide (155 KB)
+
+| Model | Rows | Grain | What it answers |
+|---|---:|---|---|
+| `dim_player` | 568 | player | Who is this, what do they cost, can I pick them |
+| `dim_team` | 20 | club | Strength, league position, squad depth and price range |
+| `fct_team_fixture` | 760 | team × fixture | The season from both dugouts |
+| `mart_team_fixture_run` | 760 | team × gameweek | Fixture difficulty, with a rolling 5-gameweek outlook |
+| `mart_player_value` | 568 | player | Points per million, rank in position, ownership, the club's next five |
+| `mart_position_scarcity` | 4 | position | Supply, price floor, and what a legal squad costs |
+
 `materialized: external` is what puts Parquet in the lake rather than tables in a DuckDB file:
 dbt writes the file, then defines a view over it so `ref()` and tests keep working. The local
 `pitch_control.duckdb` holds those views and no data — it is disposable.
+
+Silver's write path is `external_root` from `profiles.yml`, which is a single value per target.
+Gold cannot share it, so each Gold model calls `{{ config(location=gold_location()) }}` in its
+own header. That has to be per-model rather than a `+location` in `dbt_project.yml`: dbt renders
+the project file at load time, **before user macros are registered** (it fails with
+`'gold_location' is undefined`) and with no `this` in scope to name the file — so a
+project-level setting would put all six models at the same path even if the macro resolved.
 
 ## The two rules this layer exists to get right
 
@@ -118,6 +139,72 @@ The **second** half is not implemented here, because it is the opposite rule —
 a missing key is *meaningful* and must not be read as null. It applies to `bronze/postgres/`,
 which has no data yet.
 
+## The two things Gold gets right that Silver could not
+
+### Fixtures have two sides, and the grain should say so
+
+Silver's `stg_fpl__fixtures` is one row per match, with `team_h` / `team_a`,
+`team_h_difficulty` / `team_a_difficulty`, `team_h_score` / `team_a_score`. That is faithful to
+FPL and wrong for almost every question anyone asks of it, because the questions are
+team-shaped: *their* next five, *their* home record, *their* difficulty run. Each one has to
+reach into both halves and pick a side, and every consumer that does it re-implements the same
+`case when team_h = ? then … else …` ladder. Get one branch wrong and the number is subtly and
+silently wrong for half the league.
+
+`fct_team_fixture` unpivots to 760 rows — the season seen from both dugouts — and all of those
+become `where team_id = ?` plus a plain aggregate. The price is stating the mapping twice, once
+per side of the `union all`, which is precisely the thing `assert_fixture_sides_balance` checks.
+When that test was falsified by mis-copying one line into the away branch it caught **271 of
+380** fixtures — the other 109 happen to have equal difficulty on both sides, which is a fair
+illustration of why the check is not optional.
+
+### A blank gameweek is a missing row, and a `rows` window frame cannot see it
+
+`mart_team_fixture_run` computes its outlook with
+`rows between current row and 4 following`, partitioned by team and ordered by gameweek. A
+`rows` frame counts **rows**, not gameweeks. It only means "the next five gameweeks" because
+every team has exactly one row per gameweek — which is true because the model **cross joins
+teams to gameweeks before it touches a fixture**.
+
+The tempting simplification is to group `fct_team_fixture` by team and gameweek instead. It
+looks identical and passes every other test. But a team with a *blank* gameweek — no fixture,
+because their match was moved for a cup tie — would simply have no row, and their window would
+silently span six real gameweeks while everyone else's spans five. Every number would still be
+a plausible 1-5 difficulty average. `assert_fixture_run_grid_is_complete` holds the grid.
+
+There are **no blanks or doubles in the current fixture list**, which is exactly why this is
+written down: the bug is unreachable today and arrives with the first cup-tie reschedule, by
+which point nobody will remember why the cross join is there.
+
+## ⚠️ Pre-season, FPL's points are *last season's*
+
+The obvious assumption about a pre-season lake is that the scoring columns are zero — the way
+`event_live` correctly loads no rows. They are not, and this is the sharpest trap in the FPL
+payload.
+
+Measured against the live lake: **zero gameweeks are finished, and 400 of 568 players carry
+non-zero `total_points`, with a maximum of 38 `starts` and 3,420 `minutes`** — a full 38-game
+season. FPL keeps the previous season's aggregates in `bootstrap-static` until it resets them
+shortly before GW1, so `total_points`, `minutes`, `points_per_game` and the whole contribution
+block currently describe **2025/26**.
+
+That is worse than zeros, because zeros are obviously unusable and these numbers look perfectly
+usable. And they hang off the player's **current** club: Semenyo shows 3,200 minutes and 202
+points against MCI, none of which he played there. Any team-level roll-up is therefore wrong in
+a way no test on the mart can detect, because every individual value is valid.
+
+So `mart_player_value.points_are_prior_season` labels it, and the label is derived from
+**evidence** — a player has minutes while no gameweek has been played, which cannot happen
+inside one season — rather than from FPL's flags (all three are false pre-season) or the
+calendar (FPL's reset moment is unannounced). `form` is the tell: it is a 30-day rolling window,
+so it expires rather than carries over, and a payload where `form` is empty for all 568 while
+`total_points` is not is a payload straddling two seasons.
+
+The same caveat applies to `strength_attack_*` and `strength_defence_*`, which are **0 for all
+20 clubs** right now — only `strength_overall_home/away` is populated. Those columns are kept
+rather than dropped for the `optional_column` reason: a dashboard built on a schema that gains
+two columns in September is a dashboard that breaks in September.
+
 ## Typing
 
 FPL sends decimals as **strings** (`form`, `ict_index`, `expected_goals`, `selected_by_percent`,
@@ -132,16 +219,35 @@ are indistinguishable from real absence.
 
 ## Tests
 
-`dbt build` runs 66. Sixty-three are schema tests — uniqueness and not-null on every key,
-`relationships` on every FK, `accepted_values` on FPL's availability codes. The other three are
-singular tests carrying invariants that a column-level test cannot express, and each has been
-verified to fail when its invariant is violated:
+`dbt build` runs 148. Most are schema tests — uniqueness and not-null on every key,
+`relationships` on every FK, `accepted_values` on FPL's availability codes and difficulty scale.
+The other seven are singular tests carrying invariants that a column-level test cannot express,
+and **each has been verified to fail when its invariant is violated** (a test that cannot fail
+is worse than no test):
 
-| Test | Guards |
-|---|---|
-| `assert_silver_reads_one_committed_snapshot` | Every model drew from the same, single, committed load |
-| `assert_optional_columns_are_typed` | The split-null-rule columns still exist *and* still carry their cast |
-| `assert_squad_rules_agree` | `element_types` and `game_settings` describe the same game |
+| Test | Layer | Guards | Falsified by |
+|---|---|---|---|
+| `assert_silver_reads_one_committed_snapshot` | Silver | Every model drew from the same, single, committed load | — |
+| `assert_optional_columns_are_typed` | Silver | The split-null-rule columns still exist *and* still carry their cast | — |
+| `assert_squad_rules_agree` | Silver | `element_types` and `game_settings` describe the same game | — |
+| `assert_fixture_sides_balance` | Gold | The two sides of a fixture agree on opponents, difficulty and goals | mis-copying one line into the away branch → 271 failures |
+| `assert_fixture_run_grid_is_complete` | Gold | 20 × 38 with no gaps, so a `rows` frame counts gameweeks | dropping GW20 from the grid → 21 failures |
+| `assert_minimum_squad_fits_budget` | Gold | A legal squad is buyable, with room to make choices | summing the *dearest* fill → £125m against a £100m budget |
+| `assert_prior_season_points_are_flagged` | Gold | The provenance label matches the evidence, and is global | hardcoding the flag `false` |
+
+One project-local generic test, `unique_combination_of_columns` (`macros/generic_tests.sql`),
+covers composite grain — `fct_team_fixture` has no single unique column, since `fixture_id`
+appears twice by design. It is deliberately name-compatible with the dbt_utils test of the same
+name; taking the package to get one twelve-line macro is not yet a trade worth making, and when
+a second or third dbt_utils test is genuinely wanted that file is deleted.
+
+`assert_minimum_squad_fits_budget` is the one that reads like a game-design test rather than a
+data test, and it is both. FPL forces 2/5/5/3 inside £100.0m; the cheapest legal squad currently
+costs **£64.0m, leaving £36.0m of discretionary money** — which is the headroom that makes the
+game a game. Both sides of that comparison move independently and neither is ours: prices rise
+all season, the cheap end thins out as FPL removes departed players, and the budget is a value
+FPL publishes. ADR-0018 says we mirror FPL rather than invent, so if those drift into
+contradiction the build should fail rather than publish a mart describing an unplayable game.
 
 That last one is worth a note. The squad rules appear twice in FPL's API — as per-position
 counts and as flat totals — in different payloads, with nothing upstream guaranteeing they
@@ -154,10 +260,10 @@ into a spec that can drift without anyone noticing. All six currently agree.
 
 ## Not here yet, and why
 
-- **Gold.** Silver is the whole of this slice. The centrepiece marts
-  ([ADR-0013](../docs/adr/0013-identity-stitching.md) — `dim_identity_map`, `mart_manager_360`)
-  need app and PostHog data that does not exist; the FPL-only Gold that *is* possible now is the
-  next move.
+- **The identity marts.** [ADR-0013](../docs/adr/0013-identity-stitching.md)'s centrepiece —
+  `dim_identity_map` and `mart_manager_360` — needs app and PostHog data that does not exist
+  yet. The Gold that is here is the FPL-only half: everything about players, clubs and fixtures,
+  and nothing about *managers*, because there are no managers. It lands with the app layer.
 - **`bronze_postgres` sources.** The Postgres→Bronze pipeline is live and proven, but the app
   layer does not exist, so both tables are empty and dlt has written no data files — only its
   own metadata. A source over `bronze/postgres/<t>/` would glob zero files, and DuckDB errors on
