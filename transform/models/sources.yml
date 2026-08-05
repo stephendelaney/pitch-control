@@ -1,0 +1,67 @@
+version: 2
+
+sources:
+  - name: bronze_fpl
+    description: >
+      Raw FPL API payloads as landed by `ingest/run_fpl.py` (ADR-0010), read in place from the
+      lake. Nothing is copied into DuckDB first — `external_location` makes each source render
+      as a `read_json(...)` call, so a source is a query against S3, not a table.
+    meta:
+      # `{name}` is substituted by dbt-duckdb from the source table's name (Python str.format,
+      # not Jinja). The Jinja is resolved first, at parse time, and picks the lake or local
+      # disk off the same single switch the ingest layer uses.
+      #
+      # Two read options carry the Bronze contract (`ingest/README.md`) and neither is
+      # optional:
+      #
+      #   hive_partitioning=true — `load_date=YYYY-MM-DD` becomes a real DATE column rather
+      #     than an unread piece of the path, which is what lets Silver prune instead of
+      #     scanning every load ever made (ADR-0004).
+      #
+      #   union_by_name=true — Bronze omits a key whose value is null, so a field that is null
+      #     for every row in one load has no column in that load's file at all. Without this,
+      #     DuckDB takes its schema from the first file it reads and silently drops any column
+      #     that appeared later. That is the split null rule's first half, and it fails
+      #     quietly — wrong data, not an error — which is why it is pinned here rather than
+      #     left to a default.
+      external_location: "read_json('{{ 's3://' ~ env_var('PITCH_CONTROL_LAKE_BUCKET') ~ '/bronze/fpl' if env_var('PITCH_CONTROL_LAKE_BUCKET', '') else env_var('PITCH_CONTROL_BRONZE_LOCAL', '../ingest/_local_bronze/fpl') }}/{name}/*/*.jsonl.gz', hive_partitioning=true, union_by_name=true)"
+
+    tables:
+      - name: elements
+        description: Players. ~105 fields each; FPL's widest object and the spine of everything downstream.
+      - name: teams
+        description: The 20 Premier League clubs, with FPL's own strength ratings.
+      - name: element_types
+        description: Positions (GKP/DEF/MID/FWD) plus the squad rules that constrain each.
+      - name: events
+        description: Gameweeks — deadlines, finished/data_checked flags, average scores.
+      - name: fixtures
+        description: The 380-match season, re-snapshotted every run as results and difficulty ratings settle.
+      - name: chips
+        description: Chip definitions (wildcard, bench boost, …) and the windows they are playable in.
+      - name: phases
+        description: Scoring phases — month-like windows FPL ranks managers within.
+      - name: element_stats
+        description: The stat vocabulary FPL scores on; a label/name lookup, not a fact table.
+      - name: game_meta
+        description: Single-row global game state — total players, game settings, the full scoring config.
+
+      - name: dlt_loads
+        identifier: _dlt_loads
+        description: >
+          dlt's own ledger of load attempts — one row per run, `status = 0` meaning committed.
+          This is the only place that distinguishes a complete snapshot from a partial one, so
+          Silver's "latest snapshot" rule is derived from it rather than from `max(load_date)`.
+        meta:
+          # Written flat and uncompressed by dlt, so it needs its own path — no `load_date=`
+          # partition to read and no `.gz`.
+          external_location: "read_json('{{ 's3://' ~ env_var('PITCH_CONTROL_LAKE_BUCKET') ~ '/bronze/fpl' if env_var('PITCH_CONTROL_LAKE_BUCKET', '') else env_var('PITCH_CONTROL_BRONZE_LOCAL', '../ingest/_local_bronze/fpl') }}/_dlt_loads/*.jsonl', union_by_name=true)"
+
+# Deliberately absent: `bronze_postgres`.
+#
+# The Postgres→Bronze pipeline is live and proven (run 30943706203), but the app layer that
+# writes to `app.*` / `ops.*` does not exist yet, so both tables are empty and dlt has written
+# no data files at all — only its own metadata. A source declared over `bronze/postgres/<t>/`
+# would glob zero files, and DuckDB errors on a no-match glob. Declaring it now would not be a
+# placeholder, it would be a broken build. It lands with the first app migration that writes a
+# row (see docs/STATUS.md).

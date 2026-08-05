@@ -52,6 +52,8 @@ tmp/
 # `run_fpl.py --dry-run` writes a full Bronze tree here. Real FPL payloads — not secret, but
 # megabytes of source data that belong in the lake, not in git.
 _local_bronze/
+# The same, one layer up: where `dbt build` writes Silver Parquet when the lake bucket is unset.
+_local_silver/
 
 # Node / frontend
 node_modules/

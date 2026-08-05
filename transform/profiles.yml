@@ -1,0 +1,35 @@
+# dbt profile for the transform layer. Committed deliberately: it contains no secrets.
+#
+# S3 access comes from the ambient credential chain — OIDC in CI (ADR-0009/0020), the
+# maintainer's IAM profile locally — exactly as the ingest layer does it. `provider:
+# credential_chain` is what makes that work: DuckDB resolves credentials the same way boto3
+# does, so there is nothing to put on disk (ADR-0019, secrets never touch disk).
+#
+# dbt reads profiles.yml from the working directory before ~/.dbt, so running dbt from
+# `transform/` picks this up with no --profiles-dir flag and no per-machine setup.
+
+pitch_control:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+
+      # A real file, not `:memory:`. The external materialization leaves behind views that
+      # point at the Parquet in S3, and a separate `dbt test` / `dbt docs` invocation needs
+      # those views to still exist. In-memory would work for a single `dbt build` and fail
+      # every other command. The file is disposable and gitignored (`*.duckdb`) — it holds
+      # views, not data.
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'pitch_control.duckdb') }}"
+      threads: 4
+
+      extensions:
+        - httpfs
+
+      secrets:
+        - type: s3
+          provider: credential_chain
+
+      # Where `materialized: external` writes. One switch — PITCH_CONTROL_LAKE_BUCKET — picks
+      # the lake or local disk, the same switch and the same fallback semantics the ingest
+      # layer uses (`ingest/run_fpl.py`), so "unset means local" means one thing project-wide.
+      external_root: "{{ 's3://' ~ env_var('PITCH_CONTROL_LAKE_BUCKET') ~ '/silver' if env_var('PITCH_CONTROL_LAKE_BUCKET', '') else '_local_silver' }}"

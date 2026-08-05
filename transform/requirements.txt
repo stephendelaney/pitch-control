@@ -1,0 +1,10 @@
+# Transform layer (ADR-0005 dbt + ADR-0004 DuckDB). Pinned exactly, for the same reason the
+# ingest layer is: this runs unattended on a schedule, so a surprise minor bump must not be
+# the reason a build fails at 06:00.
+#
+# dbt-duckdb pulls duckdb itself, but it is pinned here too — the engine version decides what
+# SQL the models may use (QUALIFY, read_json's union_by_name, hive_partitioning), so it is a
+# contract of this project, not an implementation detail of the adapter.
+dbt-core==1.12.0
+dbt-duckdb==1.10.1
+duckdb==1.5.5

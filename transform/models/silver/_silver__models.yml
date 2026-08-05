@@ -1,0 +1,183 @@
+version: 2
+
+models:
+  - name: stg_fpl__loads
+    description: >
+      dlt's ledger of FPL load attempts — the whole history, not just the latest. `is_committed`
+      is the flag Silver's snapshot rule keys off, and `loaded_at` is the input to ADR-0012's
+      ingest-freshness SLI.
+    columns:
+      - name: load_id
+        description: dlt's run id — epoch seconds as text. The join key from every Silver row back to its run.
+        data_tests: [unique, not_null]
+      - name: is_committed
+        description: True when dlt finished the load. A false row means an interrupted run whose data files must never be read as a snapshot.
+        data_tests: [not_null]
+      - name: loaded_at
+        data_tests: [not_null]
+
+  - name: stg_fpl__teams
+    description: The 20 Premier League clubs from the latest committed snapshot.
+    columns:
+      - name: team_id
+        description: FPL's season-scoped club id. The FK target for players and fixtures.
+        data_tests: [unique, not_null]
+      - name: team_code
+        description: Stable cross-season club identifier — the one that survives a new season's id reshuffle.
+        data_tests: [unique, not_null]
+      - name: team_name
+        data_tests: [unique, not_null]
+      - name: team_short_name
+        description: Three-letter code (ARS, AVL, …).
+        data_tests: [unique, not_null]
+      - name: load_id
+        data_tests: [not_null]
+
+  - name: stg_fpl__positions
+    description: >
+      Positions and the squad rules attached to each. `squad_required` across all four rows sums
+      to the squad size in stg_fpl__game_settings — the two come from different parts of the FPL
+      payload and agreeing is not guaranteed, which is why a singular test checks it.
+    columns:
+      - name: position_id
+        data_tests: [unique, not_null]
+      - name: position_name
+        data_tests: [unique, not_null]
+      - name: position_short_name
+        data_tests: [unique, not_null]
+      - name: squad_required
+        description: How many of this position a valid 15-player squad must hold.
+        data_tests: [not_null]
+
+  - name: stg_fpl__gameweeks
+    description: >
+      The 38 gameweeks. `is_settled` (finished AND data_checked) is the flag downstream should
+      trust for "these points are final" — `is_finished` alone is true while bonus points and
+      stat corrections are still being applied.
+    columns:
+      - name: gameweek_id
+        data_tests: [unique, not_null]
+      - name: gameweek_name
+        data_tests: [unique, not_null]
+      - name: deadline_time
+        data_tests: [not_null]
+      - name: is_settled
+        data_tests: [not_null]
+
+  - name: stg_fpl__fixtures
+    description: >
+      The 380-match season. Carries the two `optional_column` fields that demonstrate the split
+      null rule — `home_score` / `away_score` are absent from Bronze entirely until the first
+      match is played, and are surfaced here as typed NULLs so Silver's schema does not move on
+      matchday one.
+    columns:
+      - name: fixture_id
+        data_tests: [unique, not_null]
+      - name: fixture_code
+        data_tests: [unique, not_null]
+      - name: gameweek_id
+        description: >
+          Nullable by design — FPL leaves it null for a fixture not yet assigned to a gameweek
+          (postponements, TV reshuffles). Currently populated for all 380. The relationships
+          test ignores nulls, so it checks referential integrity without asserting presence.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__gameweeks')
+                field: gameweek_id
+      - name: home_team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__teams')
+                field: team_id
+      - name: away_team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__teams')
+                field: team_id
+
+  - name: stg_fpl__players
+    description: >
+      Players — the spine of the FPL side of the lake. Typed (FPL sends decimals as strings),
+      renamed to domain language, and reduced to the latest committed snapshot.
+    columns:
+      - name: player_id
+        description: FPL's season-scoped player id. Joins to everything in the FPL payloads.
+        data_tests: [unique, not_null]
+      - name: player_code
+        description: Cross-season stable player identifier.
+        data_tests: [unique, not_null]
+      - name: team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__teams')
+                field: team_id
+      - name: position_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_fpl__positions')
+                field: position_id
+      - name: status
+        description: FPL availability code.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["a", "d", "i", "s", "u"]
+      - name: now_cost_tenths
+        description: Price in tenths of a million — the exact integer form price arithmetic must use.
+        data_tests: [not_null]
+      - name: now_cost_gbp_m
+        description: Derived readable price. Never the basis for arithmetic; it is a float.
+        data_tests: [not_null]
+      - name: display_name
+        data_tests: [not_null]
+      - name: load_id
+        data_tests: [not_null]
+
+  - name: stg_fpl__chips
+    description: Chip definitions and the gameweek window each is playable in (ADR-0018).
+    columns:
+      - name: chip_id
+        data_tests: [unique, not_null]
+      - name: chip_name
+        data_tests: [not_null]
+
+  - name: stg_fpl__phases
+    description: Scoring phases — the windows managers are ranked within, including the season-long "Overall".
+    columns:
+      - name: phase_id
+        data_tests: [unique, not_null]
+      - name: phase_name
+        data_tests: [unique, not_null]
+
+  - name: stg_fpl__stat_types
+    description: >
+      The stat vocabulary FPL scores on. `stat_key` is the machine name used inside
+      `fixtures.stats_json`, so this is the join target when those blobs are unpacked in Gold.
+    columns:
+      - name: stat_key
+        data_tests: [unique, not_null]
+      - name: stat_label
+        data_tests: [unique, not_null]
+
+  - name: stg_fpl__game_settings
+    description: >
+      One row of global game rules. This is where the squad/budget/transfer numbers in
+      docs/product/game-design.md §5 exist as data rather than as constants copied into a spec,
+      so a change upstream shows up as a value change here instead of silent drift.
+    columns:
+      - name: squad_size
+        data_tests: [not_null]
+      - name: lineup_size
+        data_tests: [not_null]
+      - name: budget_tenths
+        data_tests: [not_null]

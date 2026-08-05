@@ -1,0 +1,26 @@
+name: pitch_control
+version: "1.0.0"
+config-version: 2
+
+profile: pitch_control
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+
+# Silver is materialized as Parquet in the lake, not as tables inside a DuckDB file
+# (ADR-0003: Silver/Gold are Parquet on S3; ADR-0004: the engine is ephemeral and owns no
+# storage). dbt-duckdb's `external` materialization writes the Parquet and then defines a view
+# over it, so `ref()` keeps working for downstream models and tests while the artifact that
+# actually persists is the file in the lake.
+#
+# The write path is `external_root` from profiles.yml + `<model>.parquet`. Gold will need
+# `<lake>/gold`, so when it lands it overrides `location` in its own config block rather than
+# changing this — `external_root` is a single value per target.
+models:
+  pitch_control:
+    silver:
+      +materialized: external
+      +format: parquet
+      +schema: silver
