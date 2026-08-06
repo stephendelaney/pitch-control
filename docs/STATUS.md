@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-08-05** (Wk 3, Gold).
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-06** (Wk 3, Gold).
 
 ## Current phase
 
@@ -115,11 +115,12 @@ and need **no config file**, so that PR is not evidence that `dependabot.yml` is
 
 **📐 Decisions.** [**ADR-0023**](adr/0023-silver-snapshot-semantics.md) (Silver snapshot
 semantics) is **✅ ratified 2026-08-05**. [**ADR-0024**](adr/0024-gold-grain.md) (**Gold grain**)
-is newly **📝 drafted** at the maintainer's suggestion, recording the two choices above — the
+is **✅ ratified 2026-08-06** — reviewed as unremarkable — recording the two choices above — the
 two-sided unpivot and the densified grid — as one rule: *Gold carries the grain the question
 has, not the source's, and absence is an explicit flag rather than a missing row.* Written down
 specifically because the second one is **unfalsifiable against today's data** (no blanks, no
 doubles), so a future session would find a cross join with no visible reason to exist.
+**The decision log is fully Accepted again — 0001–0024, nothing Proposed.**
 
 <details><summary>Prior phase — Wk 3, Silver live in S3 (2026-08-04)</summary>
 
@@ -694,7 +695,7 @@ delegable: **B6** (remote state, post-apply only).
 | **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
 | **0022** (public-repo strategy) | ✅ Accepted — ratified 2026-07-04. Stay public + build in public; Wk-5+ Jekyll Pages showcase layered on top (not a private-repo reveal); enabled by a secret/PII leakage gate before Wk 2 (B10). |
 | **0023** (Silver snapshot semantics) | ✅ Accepted — ratified 2026-08-05. Silver takes every row of the latest *committed* Bronze load (dlt `_dlt_loads`, `status = 0`), not the latest observation per key: a removed entity must disappear rather than linger, and a partial load must be structurally unselectable. Governs every staging model, including the Postgres ones when they arrive. |
-| **0024** (Gold grain) | 📝 **Proposed — awaiting ratification.** Gold models carry the grain the *question* has, not the source's: a two-sided fact is unpivoted to one row per participant (`fct_team_fixture`, 760 rows), and a model that windows over a sequence densifies it first (`mart_team_fixture_run`, 20 × 38 cross join) so a `rows` frame counts gameweeks by construction. Absence is an explicit flag, never a missing row. |
+| **0024** (Gold grain) | ✅ Accepted — ratified 2026-08-06 (reviewed unremarkable). Gold models carry the grain the *question* has, not the source's: a two-sided fact is unpivoted to one row per participant (`fct_team_fixture`, 760 rows), and a model that windows over a sequence densifies it first (`mart_team_fixture_run`, 20 × 38 cross join) so a `rows` frame counts gameweeks by construction. Absence is an explicit flag, never a missing row. |
 
 ## Immediate next actions
 
@@ -710,7 +711,44 @@ delegable: **B6** (remote state, post-apply only).
 > opened nothing, so every pin in the repo is current as of 2026-08-05 — including the four
 > action SHAs.
 >
-> **So there is one short item below (ratify ADR-0024), and then the real work is the CI gap.**
+> **ADR-0024 is now ratified too, so nothing is awaiting a decision — the real work is the CI
+> gap.**
+>
+> ✅ **Orientation check 2026-08-06 — everything scheduled is green, unattended.**
+> `ingest-bronze` ran 08:31Z (39s, both jobs, load package `LOADED` with no failed jobs, SG
+> opened and revoked) and `sg-janitor` ran 09:42Z (11s, no `::warning::`, no orphan rules). No
+> open PRs, no open Dependabot alerts. *(Both schedules fire ~1–3h late — GitHub queues cron on
+> free runners; the 06:00/07:00 UTC in the workflows is a lower bound, not a time.)*
+>
+> 📈 **Bronze moved to 570 `elements` and Silver/Gold were rebuilt onto it — `dbt build` green,
+> 164/164 in 16s (2026-08-06).** The drift is ADR-0023's pre-season churn (564 → 567 → 568 →
+> 570): two Fulham signings, `García` (FWD, £6.0m, id 569) and `Palacios` (MID, £5.5m, id 570),
+> both zero-minute; **no players removed**. It still makes the CI gap concrete — the refresh
+> happened only because the maintainer ran the build by hand, so the derived layers are stale by
+> default rather than by exception.
+>
+> **Two things the changed row count taught, neither of which a green build would have shown:**
+>
+> 1. **`assert_minimum_squad_fits_budget` is far less sensitive than it looks.**
+>    `minimum_squad_gbp_m` did **not** move — still £64.0m, £36.0m headroom — because both
+>    signings price above their position floors and those floors are deep: **186 DEF and 63 GKP
+>    at £4.0m, 252 MID and 69 FWD at £4.5m.** The test cannot be tripped by signings; it trips
+>    when FPL *removes* most of a price tier, which is the late-window departure scenario.
+> 2. **`points_are_prior_season` is `true` for all 570 rows, including the 170 with zero
+>    minutes** — and now including two players who have **no prior season at all**. That is the
+>    flag working as built: it is a *column-level* provenance claim ("the points column in this
+>    dataset is last season's") stamped per row, because a Parquet file has no metadata sidecar.
+>    The **name** reads as a per-row claim, and for García it is literally false. Harmless while
+>    the value is uniform; it goes sharp on the first played gameweek, when the column flips
+>    `false` for everyone at once and the two readings — *this dataset straddles seasons* vs
+>    *this player's points are stale* — stop being the same statement. **Open, decide before
+>    GW1:** rename toward the dataset claim (preferred — it is the true one) or rebuild it as
+>    per-row evidence, which would set it `false` for the 170 and change
+>    `assert_prior_season_points_are_flagged`.
+>
+> 🧾 **Incidental re-confirmation of ADR-0023:** `load_date=2026-08-04` holds **1,703** element
+> rows — three snapshots stacked in one partition. `max(load_date)` would pick an arbitrary one
+> of the three; the `_dlt_loads` ledger is what makes the choice deterministic.
 >
 > **✅ Shipped 2026-08-05 — `main` is `d5cee63`** (PRs #4 `wk3-gold` and #8 docs/wrap).
 > Post-merge `terraform-check` green (run
@@ -768,16 +806,18 @@ delegable: **B6** (remote state, post-apply only).
 >    version-update PR could be raised — a dlt or dbt bump would simply not have appeared. Clear
 >    the queue rather than letting it sit.
 >
-> **0 — Ratify or reject [ADR-0024](adr/0024-gold-grain.md)** (📝 Proposed, drafted 2026-08-05
-> at your suggestion). Like 0023 it is already implemented, so a rejection means reworking
-> `fct_team_fixture` and `mart_team_fixture_run`. The one-line version: *Gold models carry the
-> grain the question has, not the source's — a two-sided fact is unpivoted to one row per
-> participant, and a model that windows over a sequence densifies that sequence first.*
+> **0 — ✅ [ADR-0024](adr/0024-gold-grain.md) ratified 2026-08-06** (reviewed unremarkable).
+> *Gold models carry the grain the question has, not the source's — a two-sided fact is
+> unpivoted to one row per participant, and a model that windows over a sequence densifies that
+> sequence first.* Now Accepted and therefore **immutable — supersede or amend, never rewrite.**
 >
-> The part worth scrutinising is the **scope limit in Consequences**: this licenses densifying a
-> model that windows over the sequence being densified, and explicitly does *not* license
+> The live constraint to remember is the **scope limit in Consequences**: it licenses densifying
+> a model that windows over the sequence being densified, and explicitly does *not* license
 > densifying everything. The multiplier is structural — 20 × 38 is 760 rows, but 568 × 38 would
-> be 21,584, and `event_live` will make that question concrete.
+> be 21,584. **`event_live` makes that question concrete with the first played gameweek**, and
+> the ADR's follow-up records the presumption: rule 1 (unpivot) probably applies to a two-sided
+> match stat, rule 2 (densify) probably does *not*, because an absent player-gameweek is
+> genuinely absent rather than a blank in a schedule.
 >
 > **Then the rest of Wk 3 — two carried-forward items, both unblocked.**
 >
@@ -983,7 +1023,8 @@ Skills being practiced deliberately, not just the app output:
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
   **Silver done 2026-08-04, Gold done 2026-08-05** — `transform/`, 16 models + 148 tests,
   Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
-  ADR-0023 (📝 Proposed). **Remaining:** `ops.pipeline_runs` writes, and a CI path — gated on a
+  ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **Remaining:** `ops.pipeline_runs`
+  writes, and a CI path — gated on a
   new `pitch-control-transform` IAM role. The ADR-0013 identity marts stay blocked on the app
   layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
