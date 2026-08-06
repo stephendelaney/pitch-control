@@ -1,7 +1,7 @@
 # ADR-0024: Gold grain — unpivot two-sided facts, densify before windowing
 
-- **Status:** Proposed
-- **Date:** 2026-08-05
+- **Status:** Accepted
+- **Date:** 2026-08-05 · ratified 2026-08-06
 - **Deciders:** Stephen Delaney
 - **Tags:** data-platform, transform, modeling, correctness
 
