@@ -1,7 +1,7 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-08-06** (Wk 3, Gold).
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-07** (Wk 3, Gold + CI).
 
 ## Current phase
 
@@ -699,55 +699,36 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ MID-TASK: three uncommitted files implement the CI gap,
-> and the apply/merge ORDER matters (sequence below). Resume with `--resume` or read this first.**
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary. The CI gap is CLOSED and proven in
+> production.** `dbt` now runs in CI on both halves, and Gold refreshes itself daily.
 >
-> **The rollout sequence — do not merge before applying.** `transform-build.yml` lists its own
-> path in its `paths:` filter, so **merging it triggers an immediate run**. If the role and the
-> repo variable do not exist yet, that first run fails on an empty `role-to-assume` — a red mark
-> on `main` for a pure ordering mistake. Applying first makes the merge self-proving instead.
+> **✅ Shipped 2026-08-07 — `main` carries the transform CI (PR #11).** The rollout ran in the
+> documented order (apply → set repo var → merge), so the merge was self-proving:
 >
-> **All three required variables have no default and nothing is on disk** (ADR-0019), so plan
-> and apply need them exported — and env vars do not survive between separate shells, so this is
-> one chained command by design:
+> - **`pitch-control-transform` applied** — OIDC, `main`-pinned; reads `bronze/*`, writes
+>   `silver/*` + `gold/*`. Repo variable `AWS_TRANSFORM_ROLE_ARN` set.
+> - **`transform-build` went green on its first run**
+>   ([`31173484914`](https://github.com/stephendelaney/pitch-control/actions/runs/31173484914),
+>   53s): `Building into s3://pitch-control-lake-749614773761/{silver,gold}/`, then
+>   **`nodes: 164  pass=148  success=16`**, with all six Gold Parquet files rewritten by the
+>   runner at 11:18 UTC.
+> - **`transform-check` (`dbt parse`, offline) green** on the PR and on the push to `main`.
 >
-> ```bash
-> # 1. Create the role (from the working tree; Terraform apply is a maintainer action).
-> cd ~/Documents/GitHub/just-for-fun/infra \
->   && export TF_VAR_db_password="$(op read 'op://pitch-control/rds-master/password')" \
->   && export TF_VAR_allowed_cidrs="[\"$(curl -s https://checkip.amazonaws.com)/32\"]" \
->   && read -rp 'budget alert email: ' email && export TF_VAR_budget_notification_email="$email" \
->   && terraform plan
-> ```
+> **🎯 The `DeleteObject` bet held.** The policy grants `GetObject`/`PutObject`/
+> `AbortMultipartUpload` on `silver/*` + `gold/*` and **no `DeleteObject`** — dbt-duckdb's
+> external materialization overwrites each Parquet in place, as predicted. This was untestable
+> before the fact (the role is OIDC-only and cannot be assumed from a laptop), so the first
+> dispatch was the experiment. **Do not add `DeleteObject` speculatively**; if a future
+> materialization needs it, the failure will name the model.
 >
-> **Expect exactly `2 to add, 0 to change, 0 to destroy`** — `aws_iam_role.transform` and its
-> inline policy. If the plan also wants to change a security-group rule, that is your home IP
-> having rotated since the last apply; benign, but notice it rather than approving past it.
-> Then, in the same shell:
+> **📈 And the point of the whole exercise, visible immediately:** Bronze drifted to **572**
+> players overnight and Gold already described 572, with nobody touching it. On 2026-08-06 the
+> equivalent drift (568 → 570) sat unpublished until a manual build. That gap is now closed
+> structurally, not by diligence.
 >
-> ```bash
-> # 2. Apply, then publish the ARN as the repo variable transform-build.yml reads.
-> terraform apply
-> gh variable set AWS_TRANSFORM_ROLE_ARN --body "$(terraform output -raw transform_role_arn)"
-> ```
->
-> ```bash
-> # 3. Commit + merge. NOTE: this touches .github/workflows/, so commit in the Terminal
-> #    (so gitleaks runs) and PUSH VIA GITHUB DESKTOP — the CLI token lacks `workflow` scope.
-> cd ~/Documents/GitHub/just-for-fun
-> git checkout -b wk3-transform-ci
-> git add infra/iam_transform.tf infra/outputs.tf .github/workflows/transform-*.yml docs/STATUS.md
-> git commit -m "feat(ci): pitch-control-transform role + dbt parse/build workflows"
-> # push via Desktop, then:
-> gh pr create --fill && gh pr merge --squash --delete-branch
->
-> # 4. The merge itself triggers transform-build. Watch it — this is the first proof the
-> #    policy is right, since the role cannot be assumed from a laptop.
-> gh run watch
-> ```
->
-> **Then add `transform-check` to the required contexts** — only *after* it has run once, since
-> a required context that has never reported is indistinguishable from a missing one:
+> **⏭️ ONE STEP REMAINS from this rollout — make the dbt check a merge gate.** It has now
+> reported twice, so it is safe to require (a context that has never reported blocks a PR
+> forever — the reason `ingest-check` is deliberately not required):
 >
 > ```bash
 > gh api -X PATCH repos/stephendelaney/pitch-control/branches/main/protection/required_status_checks \
@@ -756,9 +737,10 @@ delegable: **B6** (remote state, post-apply only).
 >   -f 'contexts[]=dbt parse (offline)'
 > ```
 >
-> **If step 4 fails on an S3 delete**, that is the known `DeleteObject` risk called out below —
-> add `s3:DeleteObject` to the `WriteSilverAndGold` statement in `infra/iam_transform.tf`, with a
-> comment naming the model that forced it, and re-apply.
+> Verify with `gh api repos/stephendelaney/pitch-control/branches/main/protection/required_status_checks --jq .contexts`
+> — expect all three. **`transform-build` must NOT be added**: it carries `paths:` filters and
+> holds AWS credentials; requiring it would both block on unreported runs and put a
+> credentialed job on the PR path.
 > Silver *and* Gold are live in S3 and `dbt build` is green (16 models, 148 tests). **The Wk-3
 > hardening block is fully closed:** `sha_pinning_required` `true`,
 > `dependabot_security_updates` `enabled`, `dependabot.yml` live, **`main` branch-protected**,
@@ -891,11 +873,10 @@ delegable: **B6** (remote state, post-apply only).
 >    null. It is the opposite of the column rule and there is no data to test it against until
 >    the app layer writes a row. Write that test with the first `bronze_postgres` source.
 >
-> **⚠️ THE CI GAP — written 2026-08-06, NOT yet applied. This is the live piece of work.**
-> `pitch-control-ingest` holds `s3:GetObject`/`PutObject` on **`bronze/*` only**, which is
-> correct for ingest and insufficient for dbt — it cannot write `silver/*` **or `gold/*`**. Per
-> ADR-0020 the fix is a separate identity, and three files now exist for it, all `fmt`-clean and
-> `terraform validate`-clean, **uncommitted and unapplied**:
+> **✅ THE CI GAP — CLOSED 2026-08-07, proven on `main`.** `pitch-control-ingest` holds
+> `s3:GetObject`/`PutObject` on **`bronze/*` only**, which is correct for ingest and
+> insufficient for dbt. Per ADR-0020 the fix was a separate identity; three files now live on
+> `main`:
 >
 > | File | What |
 > |---|---|
@@ -903,17 +884,17 @@ delegable: **B6** (remote state, post-apply only).
 > | `.github/workflows/transform-check.yml` | PR-time `dbt parse`, **no credentials**, **no `paths:` filter** so it can be a required check |
 > | `.github/workflows/transform-build.yml` | scheduled 10:00 UTC + dispatch + push-on-`transform/**`; assumes the role, runs `dbt build` |
 >
-> **⛔ It cannot be tested before it is applied, and that is deliberate.** The role's trust
+> **⛔ It could not be tested before it was applied, and that was deliberate.** The role's trust
 > policy names only the GitHub OIDC provider — no IAM principal — so it **cannot be assumed from
 > a laptop**. Adding a human principal to test it would defeat the `main` pinning. The first
-> proof is a real `workflow_dispatch` run.
+> proof was a real run, and it passed.
 >
-> **The known risk, stated up front:** the policy grants `GetObject`/`PutObject`/
+> **The risk that was stated up front, and resolved:** the policy grants `GetObject`/`PutObject`/
 > `AbortMultipartUpload` on `silver/*` + `gold/*` and **deliberately withholds `DeleteObject`**,
 > on the reasoning that dbt-duckdb's external materialization overwrites each Parquet file in
-> place. If that is wrong, the first dispatch fails on a delete — a loud, cheap failure, but one
-> that costs another apply cycle to fix. Weighed against granting a data job the ability to
-> silently remove a mart, the round trip is the better risk.
+> place. **That held** — run `31173484914` wrote all 16 models with no delete permission at all.
+> The reasoning is now confirmed rather than assumed, so **do not add `DeleteObject`
+> speculatively**; if a future materialization needs it, the failure will name the model.
 >
 > ✅ **Measured 2026-08-06, and it corrects what this file previously said.** The old note here
 > proposed `dbt parse` **or `dbt compile --empty`** as credential-free PR checks. **`compile` is
@@ -1113,8 +1094,8 @@ Skills being practiced deliberately, not just the app output:
   **Silver done 2026-08-04, Gold done 2026-08-05** — `transform/`, 16 models + 148 tests,
   Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
   ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **Remaining:** `ops.pipeline_runs`
-  writes, and the CI path — **written 2026-08-06 (role + two workflows), awaiting apply** — gated on a
-  new `pitch-control-transform` IAM role. The ADR-0013 identity marts stay blocked on the app
+  writes. **The CI path is DONE (2026-08-07)** — `pitch-control-transform` applied, `dbt parse`
+  guarding PRs and `dbt build` publishing Silver + Gold daily. The ADR-0013 identity marts stay blocked on the app
   layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
