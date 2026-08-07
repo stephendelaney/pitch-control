@@ -699,7 +699,66 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary, nothing uncommitted, nothing in flight.**
+> ⏭️ **NEXT SESSION STARTS HERE — ⚠️ MID-TASK: three uncommitted files implement the CI gap,
+> and the apply/merge ORDER matters (sequence below). Resume with `--resume` or read this first.**
+>
+> **The rollout sequence — do not merge before applying.** `transform-build.yml` lists its own
+> path in its `paths:` filter, so **merging it triggers an immediate run**. If the role and the
+> repo variable do not exist yet, that first run fails on an empty `role-to-assume` — a red mark
+> on `main` for a pure ordering mistake. Applying first makes the merge self-proving instead.
+>
+> **All three required variables have no default and nothing is on disk** (ADR-0019), so plan
+> and apply need them exported — and env vars do not survive between separate shells, so this is
+> one chained command by design:
+>
+> ```bash
+> # 1. Create the role (from the working tree; Terraform apply is a maintainer action).
+> cd ~/Documents/GitHub/just-for-fun/infra \
+>   && export TF_VAR_db_password="$(op read 'op://pitch-control/rds-master/password')" \
+>   && export TF_VAR_allowed_cidrs="[\"$(curl -s https://checkip.amazonaws.com)/32\"]" \
+>   && read -rp 'budget alert email: ' email && export TF_VAR_budget_notification_email="$email" \
+>   && terraform plan
+> ```
+>
+> **Expect exactly `2 to add, 0 to change, 0 to destroy`** — `aws_iam_role.transform` and its
+> inline policy. If the plan also wants to change a security-group rule, that is your home IP
+> having rotated since the last apply; benign, but notice it rather than approving past it.
+> Then, in the same shell:
+>
+> ```bash
+> # 2. Apply, then publish the ARN as the repo variable transform-build.yml reads.
+> terraform apply
+> gh variable set AWS_TRANSFORM_ROLE_ARN --body "$(terraform output -raw transform_role_arn)"
+> ```
+>
+> ```bash
+> # 3. Commit + merge. NOTE: this touches .github/workflows/, so commit in the Terminal
+> #    (so gitleaks runs) and PUSH VIA GITHUB DESKTOP — the CLI token lacks `workflow` scope.
+> cd ~/Documents/GitHub/just-for-fun
+> git checkout -b wk3-transform-ci
+> git add infra/iam_transform.tf infra/outputs.tf .github/workflows/transform-*.yml docs/STATUS.md
+> git commit -m "feat(ci): pitch-control-transform role + dbt parse/build workflows"
+> # push via Desktop, then:
+> gh pr create --fill && gh pr merge --squash --delete-branch
+>
+> # 4. The merge itself triggers transform-build. Watch it — this is the first proof the
+> #    policy is right, since the role cannot be assumed from a laptop.
+> gh run watch
+> ```
+>
+> **Then add `transform-check` to the required contexts** — only *after* it has run once, since
+> a required context that has never reported is indistinguishable from a missing one:
+>
+> ```bash
+> gh api -X PATCH repos/stephendelaney/pitch-control/branches/main/protection/required_status_checks \
+>   -f 'contexts[]=fmt + validate (offline)' \
+>   -f 'contexts[]=gitleaks secret scan' \
+>   -f 'contexts[]=dbt parse (offline)'
+> ```
+>
+> **If step 4 fails on an S3 delete**, that is the known `DeleteObject` risk called out below —
+> add `s3:DeleteObject` to the `WriteSilverAndGold` statement in `infra/iam_transform.tf`, with a
+> comment naming the model that forced it, and re-apply.
 > Silver *and* Gold are live in S3 and `dbt build` is green (16 models, 148 tests). **The Wk-3
 > hardening block is fully closed:** `sha_pinning_required` `true`,
 > `dependabot_security_updates` `enabled`, `dependabot.yml` live, **`main` branch-protected**,
@@ -832,20 +891,50 @@ delegable: **B6** (remote state, post-apply only).
 >    null. It is the opposite of the column rule and there is no data to test it against until
 >    the app layer writes a row. Write that test with the first `bronze_postgres` source.
 >
-> **⚠️ CI still cannot run `dbt build` — this needs a Terraform apply (maintainer), and it is
-> now the biggest single gap in Wk 3.** The transform job has no AWS identity:
+> **⚠️ THE CI GAP — written 2026-08-06, NOT yet applied. This is the live piece of work.**
 > `pitch-control-ingest` holds `s3:GetObject`/`PutObject` on **`bronze/*` only**, which is
-> correct for ingest and insufficient here — it cannot write `silver/*` **or `gold/*`**. Per
-> ADR-0020 (one role per compute identity) the fix is a **new `pitch-control-transform` role**:
-> read `bronze/*`, write `silver/*` + `gold/*`, `main`-pinned. Until that exists, `dbt build` is
-> a local-only command and there is no `transform-check.yml` — **16 models and 148 tests are
-> currently guarded by nothing but the maintainer remembering to run them.**
+> correct for ingest and insufficient for dbt — it cannot write `silver/*` **or `gold/*`**. Per
+> ADR-0020 the fix is a separate identity, and three files now exist for it, all `fmt`-clean and
+> `terraform validate`-clean, **uncommitted and unapplied**:
 >
-> A PR-time check that needs **no** credentials (`dbt parse` / `dbt compile --empty`) is worth
-> having in the meantime and is a few lines of workflow. Note it would *not* have caught this
-> session's real problems: both were wrong claims about live data (points that turned out to be
-> last season's; strength ratings that turned out to be zero), which only a build against the
-> lake can surface.
+> | File | What |
+> |---|---|
+> | `infra/iam_transform.tf` | `pitch-control-transform` role — OIDC, `main`-pinned; read `bronze/*`, write `silver/*` + `gold/*` |
+> | `.github/workflows/transform-check.yml` | PR-time `dbt parse`, **no credentials**, **no `paths:` filter** so it can be a required check |
+> | `.github/workflows/transform-build.yml` | scheduled 10:00 UTC + dispatch + push-on-`transform/**`; assumes the role, runs `dbt build` |
+>
+> **⛔ It cannot be tested before it is applied, and that is deliberate.** The role's trust
+> policy names only the GitHub OIDC provider — no IAM principal — so it **cannot be assumed from
+> a laptop**. Adding a human principal to test it would defeat the `main` pinning. The first
+> proof is a real `workflow_dispatch` run.
+>
+> **The known risk, stated up front:** the policy grants `GetObject`/`PutObject`/
+> `AbortMultipartUpload` on `silver/*` + `gold/*` and **deliberately withholds `DeleteObject`**,
+> on the reasoning that dbt-duckdb's external materialization overwrites each Parquet file in
+> place. If that is wrong, the first dispatch fails on a delete — a loud, cheap failure, but one
+> that costs another apply cycle to fix. Weighed against granting a data job the ability to
+> silently remove a mart, the round trip is the better risk.
+>
+> ✅ **Measured 2026-08-06, and it corrects what this file previously said.** The old note here
+> proposed `dbt parse` **or `dbt compile --empty`** as credential-free PR checks. **`compile` is
+> not credential-free.** `profiles.yml` declares an S3 secret with `provider: credential_chain`,
+> which DuckDB validates when the *connection opens* — so with the chain blinded, compile dies
+> before touching a model:
+>
+> ```
+> _duckdb.Error: Secret Validation Failure: during `create` using the following:
+> Credential Chain: 'config'
+> ```
+>
+> `dbt parse` never opens a connection and runs clean with no credentials at all. **Parse is the
+> only credential-free dbt command here** — this applies to any future offline check, not just
+> this workflow.
+>
+> **What parse does and does not buy.** It catches Jinja syntax, a broken `ref`/`source`, a
+> missing macro, malformed schema YAML, a test naming an undeclared column. It catches **none**
+> of the bugs that actually happened in Wk 3 — the prior-season points and the zeroed strength
+> ratings were both wrong claims about live data, visible only in a build against the lake. A
+> green `transform-check` is not evidence the build works.
 >
 > 💡 **Two environment gotchas that will cost time if forgotten** (both in *Current phase*):
 > this Mac's OpenSSL has **no `cert.pem`**, so a source build that downloads at build time
@@ -1024,7 +1113,7 @@ Skills being practiced deliberately, not just the app output:
   **Silver done 2026-08-04, Gold done 2026-08-05** — `transform/`, 16 models + 148 tests,
   Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
   ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **Remaining:** `ops.pipeline_runs`
-  writes, and a CI path — gated on a
+  writes, and the CI path — **written 2026-08-06 (role + two workflows), awaiting apply** — gated on a
   new `pitch-control-transform` IAM role. The ADR-0013 identity marts stay blocked on the app
   layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.

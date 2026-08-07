@@ -1,0 +1,77 @@
+# CI guard for transform/ — the credential-free half of the dbt story.
+#
+# Until this existed, 16 models and 148 tests were guarded by nothing but the maintainer
+# remembering to run `dbt build` locally. This does not close that gap on its own — see
+# transform-build.yml for the half that actually executes the models against the lake — but it
+# is the half that can run on a pull request, including from a fork, because it holds no
+# credential.
+#
+# ⚠️ WHY `dbt parse` AND NOT `dbt compile`: parse never opens a warehouse connection. Compile
+# does, and profiles.yml declares an S3 secret with `provider: credential_chain`, which DuckDB
+# validates at connection setup — with no credentials resolvable it fails outright with
+# `Secret Validation Failure: during 'create' using the following: Credential Chain: 'config'`,
+# before a single model is touched. Measured 2026-08-06 with the chain blinded. `dbt compile
+# --empty` fails the same way for the same reason; it is not a credential-free command.
+#
+# So the honest boundary is: parse catches everything resolvable without a warehouse — Jinja
+# syntax, a broken `ref`/`source`, a macro that does not exist, malformed schema YAML, a test
+# pointing at a column that is not declared. It cannot catch anything that depends on the data,
+# which includes both of the real bugs found while building Gold (points that turned out to be
+# last season's, strength ratings that turned out to be zero). Do not mistake a green check
+# here for a working build.
+#
+# NO `paths:` FILTER, deliberately. This workflow is meant to be a *required* status check on
+# main, and a required check that never runs never reports — the PR then blocks forever with no
+# way to satisfy it. `ingest-check.yml` carries paths filters and is for exactly that reason NOT
+# in the required list (see docs/STATUS.md). Running a 30-second parse on a docs-only PR is the
+# price of being requireable, and it is worth paying.
+#
+# Actions are SHA-pinned. There is no credential here to steal, but this runs on `pull_request`
+# including from forks, so the runner is already executing untrusted code; a mutable tag would
+# be a second untrusted input.
+name: transform-check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  parse:
+    name: dbt parse (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: transform
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          # 3.14 matches the interpreter the models were developed and proven on locally.
+          # Pinned minor, not "3.x", for the same reason ingest pins: an interpreter bump
+          # should be a deliberate commit, not a surprise in a check that gates merges.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: transform/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # PITCH_CONTROL_LAKE_BUCKET is deliberately left unset. profiles.yml treats "unset" as
+      # "write to local disk" (`_local_silver`), the same switch the ingest layer uses — so
+      # even if a future dbt version made parse touch the filesystem, it could not reach the
+      # lake from here.
+      - name: dbt parse
+        run: dbt parse
+
+      # The manifest is the artifact parse produces, and its absence would mean parse exited 0
+      # without doing the thing this job exists for. Cheap assertion against a silent no-op.
+      - name: Assert manifest was produced
+        run: test -s target/manifest.json && echo "manifest.json written"

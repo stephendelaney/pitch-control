@@ -1,0 +1,137 @@
+# Wk 3 — Silver + Gold, built against the live lake (ADR-0005 dbt, ADR-0003 Medallion).
+#
+#   s3://<lake>/bronze/  --read-->  dbt-duckdb  --write-->  s3://<lake>/silver/ + /gold/
+#
+# This is the job that makes the derived layers refresh on their own. Before it existed, Silver
+# and Gold only moved when the maintainer ran `dbt build` by hand, which meant the published
+# marts were stale by default: on 2026-08-06 Bronze had 570 players and Gold described 568,
+# and the only reason anyone noticed was a manual orientation check.
+#
+# It assumes the dedicated transform identity (`infra/iam_transform.tf`, ADR-0020) — read
+# bronze/*, write silver/* + gold/*, and nothing else. Deliberately NOT the ingest role: ingest
+# must not be able to overwrite a mart, and dbt must not be able to corrupt the append-only
+# record it rebuilds from. That split is the whole reason there are two roles.
+#
+# Third-party actions are pinned to a full commit SHA (see ingest-bronze.yml for the argument —
+# this job hands `configure-aws-credentials` an OIDC token, so a moved tag is credential theft).
+name: transform-build
+
+on:
+  schedule:
+    # 10:00 UTC, four hours nominally after ingest-bronze's 06:00, so the build normally sees
+    # the day's Bronze load.
+    #
+    # ⚠️ That ordering is best-effort and NOT guaranteed: GitHub queues cron on shared runners
+    # and both schedules drift by hours (observed 2026-08-06 — ingest fired at 08:31, the
+    # janitor's 07:00 at 09:42). Correctness does not depend on winning the race. ADR-0023
+    # selects the latest *committed* Bronze load, so a build that runs early simply models
+    # yesterday's snapshot — a day stale, never wrong, and self-correcting on the next run.
+    #
+    # `workflow_run` (chaining off ingest-bronze) would make the ordering exact and is
+    # deliberately not used: this repo has no `workflow_run` and no `pull_request_target`
+    # anywhere, and that absence is a stated security property (docs/STATUS.md — the two
+    # "pwn request" vectors). Trading it for a few hours of freshness is a bad trade.
+    - cron: "0 10 * * *"
+
+  workflow_dispatch:
+
+  push:
+    branches: [main]
+    # Model changes republish immediately rather than waiting for the next schedule. Docs-only
+    # commits do not rebuild the lake. This filter is safe here precisely because this workflow
+    # is NOT a required status check — see transform-check.yml for why that distinction matters.
+    paths:
+      - "transform/**"
+      - ".github/workflows/transform-build.yml"
+
+permissions:
+  # Mints the OIDC token exchanged for the transform role. Keyless — no long-lived AWS key
+  # exists anywhere (ADR-0009).
+  id-token: write
+  contents: read
+
+# `dbt build` is a full overwrite of every model, so two concurrent runs would race on the same
+# Parquet objects and could interleave a half-written Gold across two Bronze snapshots.
+#
+# `cancel-in-progress: false` is load-bearing: a cancelled runner is hard-killed mid-build,
+# which leaves exactly that split-vintage state — some models on the new snapshot, some on the
+# old, every individual file valid. Queue instead, and let a running build finish.
+concurrency:
+  group: transform-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: dbt build -> Silver + Gold
+    runs-on: ubuntu-latest
+    # A local run is ~16-37s against S3. This is a stuck-network guard, not a budget.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: transform
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          # Keep in lockstep with transform-check.yml — parsing on a different interpreter to
+          # the one that builds defeats the point of the check.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: transform/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # 🔒 STEP ORDER IS LOAD-BEARING, same rule as ingest-bronze.yml: everything that installs
+      # or executes third-party code runs BEFORE the credential is minted, so a compromised
+      # transitive dependency executes in a step with no cloud credential to steal. Do not move
+      # configure-aws-credentials up beside the other `uses:` steps to tidy the file.
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ vars.AWS_TRANSFORM_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: transform-build-${{ github.run_id }}
+
+      - name: Assert the lake bucket variable is set
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        # Without this, an unset variable would not fail the job — profiles.yml falls back to
+        # writing `_local_silver` on the runner's disk, and dbt would report a green build that
+        # published nothing. Same trap as ingest's, and the same guard.
+        run: |
+          if [ -z "${PITCH_CONTROL_LAKE_BUCKET}" ]; then
+            echo "::error::PITCH_CONTROL_LAKE_BUCKET repo variable is not set - refusing to run."
+            echo "::error::Unset, dbt writes to the runner's disk and exits 0 (see profiles.yml)."
+            exit 1
+          fi
+          echo "Building into s3://${PITCH_CONTROL_LAKE_BUCKET}/{silver,gold}/"
+
+      - name: dbt build
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        # `dbt build` interleaves each model with its tests in DAG order, so a failing test
+        # halts everything downstream of it rather than publishing a mart that its own tests
+        # reject. The already-written upstream models stay written — see the concurrency note
+        # above — so a red run means "re-run after fixing", not "the lake is corrupt".
+        run: dbt build
+
+      # dbt exits 0 on a run where every model was skipped, so assert the artifact rather than
+      # trusting the exit code. run_results.json is what a future observability step (elementary,
+      # or the ops.pipeline_runs writer that Wk 3 still owes) would read.
+      - name: Summarise the run
+        if: always()
+        run: |
+          test -s target/run_results.json || { echo "::error::no run_results.json"; exit 1; }
+          python - <<'PY'
+          import json
+          with open("target/run_results.json") as f:
+              r = json.load(f)
+          from collections import Counter
+          c = Counter(x["status"] for x in r["results"])
+          print(f"nodes: {len(r['results'])}  " + "  ".join(f"{k}={v}" for k, v in sorted(c.items())))
+          for x in r["results"]:
+              if x["status"] not in ("success", "pass"):
+                  print(f"::warning::{x['status']}: {x['unique_id']}")
+          PY
