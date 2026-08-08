@@ -5,10 +5,11 @@
 
 ## Current phase
 
-**▶️ Wk 3's last owed item is BUILT, not yet shipped (2026-08-08).** *(For Gold, the transform
-CI and the prior-season-points trap, see the collapsed Wk-3 block below.)* `ops.pipeline_runs` had sat
-empty since Wk 1 with nothing writing to it. It now has a writer — and the writer does not go to
-Postgres, which is the decision of this session and is recorded as
+**✅ Wk 3's last owed item is SHIPPED AND PROVEN IN PRODUCTION (2026-08-08, PR #13, `main` is
+`223836e`).** *(For Gold, the transform CI and the prior-season-points trap, see the collapsed
+Wk-3 block below.)* `ops.pipeline_runs` had sat empty since Wk 1 with nothing writing to it. It
+now has a writer — and the writer does not go to Postgres, which is the decision of this session
+and is recorded as
 [**ADR-0025**](adr/0025-pipeline-run-ledger-in-the-lake.md) — **✅ ratified 2026-08-08, and
 therefore immutable: supersede or amend, never rewrite.** The decision log is fully Accepted
 again — 0001–0025, nothing Proposed.
@@ -56,7 +57,35 @@ from the stdlib. The catch is that `ru_maxrss` is **kilobytes on Linux and bytes
 1024× error that looks plausible on both, so the conversion is platform-switched. psutil stays,
 but only for dlt's own progress instrumentation.
 
-**Proven before shipping, three ways, since the first CI run will be the real test:**
+**🎯 LIVE RESULT — six objects, three complete pairs, all `success` (2026-08-08).** Both the
+merge-triggered `transform-build` ([`31254862626`](https://github.com/stephendelaney/pitch-control/actions/runs/31254862626))
+and a dispatched `ingest-bronze` ([`31254962964`](https://github.com/stephendelaney/pitch-control/actions/runs/31254962964))
+wrote their records on the first attempt, with **no `::warning::` from the ledger anywhere**:
+
+| `run_key` | pipeline | rows | peak MB | detail |
+|---|---|---|---|---|
+| `31254862626.1.build` | `transform_dbt` | — | — | 164 nodes, pass=148 success=16, 19.2s |
+| `31254962964.1.fpl` | `fpl_bronze` | **1,061** | 111 | 9 tables, `elements` 573 |
+| `31254962964.1.postgres` | `postgres_bronze` | **0** | 123 | `row_counts: {}` |
+
+**Four design claims were confirmed by these records, none of which a green run alone shows:**
+
+1. **The three-part `run_key` is load-bearing and now proven so.** Both ingest jobs share
+   `run_id` **31254962964** and are told apart only by the job segment — `.fpl` vs `.postgres`.
+   A key built from the run id alone would have collided on the first real run.
+2. **`0` and `null` stayed distinguishable.** `postgres_bronze` recorded `rows_processed: 0` with
+   an empty `row_counts`, not null — the app layer is still empty, which is the *expected*
+   outcome, and it must not look like a job that died before reporting. That distinction was
+   added deliberately and is now exercised.
+3. **The `ru_maxrss` unit switch is right on Linux.** 111 MB and 123 MB are plausible figures;
+   a missed KB→MB conversion would have produced ~113,000 MB or 0. macOS was already covered by
+   the local rehearsal (87 MB), so **both branches of the platform switch are now proven**.
+4. **The Postgres job's finish step ran after the SG revoke, as designed**, and recorded
+   `success` — meaning the revoke succeeded and was folded into the status. Confirmed
+   independently: `describe-security-group-rules` shows **exactly one rule, the home /32**, no
+   orphan.
+
+**Proven before shipping, three ways, because the first CI run was going to be the real test:**
 1. **End-to-end locally** against the live FPL API — both records paired on one `run_key`,
    **1,061 rows and peak 87 MB** captured into the finish record.
 2. **The S3 branch against a stubbed `aws` CLI** (the sweep-fix technique from Wk 2): the
@@ -720,7 +749,9 @@ delegable: **B6** (remote state, post-apply only).
   the `aws` CLI, shared by all three pipeline jobs across two Python environments (the same
   one-definition argument that put `sg-ephemeral.sh` here). `ingest/run_metrics.py` is the dlt
   side of the seam — row counts from the trace, peak RSS from `resource.getrusage`.
-  **Built and locally proven 2026-08-08; not yet run in CI.**
+  **LIVE — first records written 2026-08-08** (PR #13): six objects at
+  `s3://<lake>/bronze/ops_runs/`, three complete pairs across all three jobs, all `success`.
+  Reasoning and the four confirmed design claims: *Current phase*.
 - **`ingest/`** — both Wk-2 Bronze pipelines. dlt sources + the pure gameweek-selection rule +
   **58 unit tests** + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
   contract Silver will read against (JSONL/gzip, Hive `load_date=` partition, nesting kept
@@ -777,8 +808,9 @@ delegable: **B6** (remote state, post-apply only).
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary. The run ledger is built, tested and
-> unshipped; nothing is half-edited.** Wk 3's last owed item has a writer.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary. The run ledger is shipped, on `main`, and
+> proven in production.** Wk 3's last owed item is closed; **the one live next move is the Silver
+> model, and it is now unblocked** (step 1 below).
 >
 > **✅ [ADR-0025](adr/0025-pipeline-run-ledger-in-the-lake.md) ratified 2026-08-08** — nothing is
 > awaiting a decision. The load-bearing claim is in *Context*: instrumenting all three jobs
@@ -789,53 +821,95 @@ delegable: **B6** (remote state, post-apply only).
 > snapshot of the app layer's RDS table, and a session that reads the wrong one finds an empty
 > table and no error.
 >
-> **✅ 1 — Committed** as `6a351e4` on branch `wk3-run-ledger` (2026-08-08). **`.github/workflows/`
-> is touched, so this bundle pushes via GitHub Desktop** (the CLI token lacks `workflow` scope).
+> **✅ The rollout is DONE — applied, merged as PR #13, and proven.** Recorded here because the
+> *ordering* is the reusable part and the intuitive order is wrong:
 >
-> **2 — `terraform apply` NOW, from the branch, BEFORE the merge.** ⚠️ **The order is
-> load-bearing and the intuitive one is wrong.**
+> **`terraform apply` ran from the branch, BEFORE the merge, and had to.** Apply does not need
+> `main` — it runs from the maintainer's laptop as `stephendelaney_IAM` against S3 remote state,
+> reading the **working tree**. The `main` pinning in this repo is on the *role trust policies*
+> (which CI runs may assume a role), not on who may apply Terraform; there is no terraform-apply
+> workflow and every apply has always been local. Merging first would have broken the rollout,
+> because the changeset touches `.github/workflows/transform-build.yml`, **which sits in that
+> workflow's own `paths:` filter** — so the merge triggers a build within minutes. Had the grant
+> not been live, the two ledger steps would have emitted `::warning::` and exited 0: a **green
+> run that silently writes no records**, which reads as a broken writer rather than a missing
+> grant. Same order as the PR #11 rollout (*apply → merge*), and for the same reason — it makes
+> the merge self-proving. **Generalise it: apply the IAM before merging the workflow that needs
+> it, whenever the merge itself can trigger that workflow.**
 >
-> Apply does not need `main`: it runs from the maintainer's laptop as `stephendelaney_IAM`
-> against S3 remote state, reading the **working tree**. The `main` pinning in this repo is on
-> the *role trust policies* — which CI runs may assume a role — not on who may apply Terraform.
-> There is no terraform-apply workflow; every apply has always been local.
->
-> Merging first actively breaks the rollout, because this changeset touches
-> `.github/workflows/transform-build.yml`, **which is in that workflow's own `paths:` filter** —
-> so the merge *immediately triggers a build*. If the grant is not live when it fires, the two
-> ledger steps emit `::warning::` and exit 0: a **green run that silently writes no records**,
-> which reads as a broken writer rather than a missing grant. `iam_transform.tf` gains one
-> statement (`s3:PutObject` on `bronze/ops_runs/*`). The ingest role needs nothing — it already
-> holds `bronze/*`.
->
-> ```bash
-> cd infra && terraform plan    # expect: 1 to change (aws_iam_role_policy.transform_lake)
-> terraform apply
-> ```
->
-> Same order as the PR #11 rollout (*apply → set repo var → merge*), and for the same reason:
-> it makes the merge self-proving.
->
-> **3 — Merge, then watch for the first records.** The `transform_dbt` pair arrives **within
-> minutes** — the merge triggers `transform-build` via the `paths:` filter above, so that run is
-> the first live proof. The two ingest pairs wait for the next `ingest-bronze` schedule (06:00
-> UTC nominal; expect it hours late — GitHub queues cron on free runners).
+> The full result is in *Current phase* — six objects, three pairs, all `success`, no ledger
+> warnings, no orphaned SG rule. Re-check any time with:
 >
 > ```bash
 > aws s3 ls --recursive "s3://$(cd infra && terraform output -raw lake_bucket)/bronze/ops_runs/"
 > ```
 >
-> Eventually **six objects** — a `.start.jsonl` and a `.finish.jsonl` for each of `fpl_bronze`,
-> `postgres_bronze`, `transform_dbt`. **An odd number is the interesting outcome**, not a broken
-> deploy: a start without a finish means a job died between them, and the unpaired `run_key`
-> names it.
+> **An odd count is the interesting outcome**, not a broken deploy: a start without a finish
+> means a job died between them, and the unpaired `run_key` names the run.
 >
-> **4 — Then the Silver model, which is genuinely blocked until step 3 produces files.** DuckDB
-> errors on a glob matching zero files, so `stg_ops__pipeline_runs` cannot be declared before the
-> first records exist. It pairs the two events per `run_key`; ADR-0012's SLI and the ADR-0007
-> trip-wire models sit on top of it. ⚠️ **A run crossing midnight lands its two records in
-> different `load_date=` partitions** — pairing is on `run_key`, not the partition, so a model
-> that prunes to a single date will manufacture unpaired starts.
+> **⏭️ 1 — THE NEXT MOVE: `stg_ops__pipeline_runs`, now unblocked.** It was blocked because
+> DuckDB errors on a glob matching zero files; **six objects now exist**, so the source can be
+> declared. Read `bronze/ops_runs/**/*.jsonl` (plain JSONL, *not* `.gz` — this path is
+> hand-written, not dlt's) and pair the two events per `run_key` into one row per run. ADR-0012's
+> SLI and the ADR-0007 trip-wire models sit on top of it.
+>
+> Four things it has to get right, all visible in the six live records:
+>
+> - **An unpaired `start` is a signal, not a defect** — it means the runner died. An inner join
+>   silently drops exactly the runs worth finding; pair with a left join from `start`.
+> - **⚠️ A run crossing midnight lands its two records in different `load_date=` partitions.**
+>   Pairing is on `run_key`, not the partition, so a model that prunes to a single date will
+>   manufacture unpaired starts.
+> - **`rows_processed` is null for `transform_dbt` and 0 for `postgres_bronze`, and those mean
+>   different things** — unknown vs. genuinely nothing. Do not coalesce them together.
+> - **`detail` is a nested struct with a per-pipeline shape** (`row_counts` for the dlt jobs,
+>   `node_status` for dbt). Keep it as-is or unpack per pipeline; do not force one schema.
+>
+> ADR-0025 also leaves one open question worth deciding when the app layer lands: whether it
+> writes RDS `ops.pipeline_runs` as assumed, or joins this ledger. If it joins, amend the ADR and
+> drop the table.
+>
+> 🔑 **Running Terraform — the three variables that have no default.**
+>
+> `infra/variables.tf` leaves **`db_password`, `budget_notification_email` and `allowed_cidrs`**
+> without defaults, and there is **no committed `terraform.tfvars`** (only `.example`, since a
+> real one would put a password and an email on disk). So every `plan`/`apply` needs all three
+> exported — including `db_password` for a change that never touches RDS, because `plan` refuses
+> to start without it. It will not appear in the diff.
+>
+> **Exports do not survive between shells, so paste the block whole** (verified 2026-08-08):
+>
+> ```bash
+> cd ~/Documents/GitHub/just-for-fun/infra
+> export TF_VAR_db_password="$(op read 'op://pitch-control/rds-master/password')"
+> export TF_VAR_allowed_cidrs="[\"$(curl -s https://checkip.amazonaws.com)/32\"]"
+> export TF_VAR_budget_notification_email="$(
+>   ACCT=$(aws sts get-caller-identity --query Account --output text); B=pitch-control-monthly-cost
+>   aws budgets describe-subscribers-for-notification --account-id "$ACCT" --budget-name "$B" \
+>     --notification "$(aws budgets describe-notifications-for-budget --account-id "$ACCT" \
+>       --budget-name "$B" --query 'Notifications[0]' --output json)" \
+>     --query 'Subscribers[0].Address' --output text)"
+> terraform plan
+> ```
+>
+> Three things about that block are deliberate:
+>
+> - **`allowed_cidrs` is `list(string)`, so its `TF_VAR_` form must be JSON.** A bare
+>   `1.2.3.4/32` fails with a type error rather than being coerced.
+> - **The email is *derived from live AWS*, not written down.** This is a public repo and the
+>   address is PII that has been kept off-repo since B2 — so the value must never land in a
+>   committed file, and a `you@example.com` placeholder would make the block unpasteable and
+>   invite a wrong value. Reading it back from the budget's own subscriber list means the export
+>   always matches what state already holds, so it can never manufacture a diff. *(If it ever
+>   moves to 1Password, replace this with an `op read` — the vault currently holds only
+>   `rds-master`.)*
+> - **`op` must be signed in** for the password, and the AWS CLI authenticated for the email.
+>
+> **Reading the plan.** `1 to change` on the resource you edited is the expected shape. An SG
+> rule change too means **your IP has rotated** since the last apply — benign, and the README's
+> "my IP changed" path folding into this apply. **Any budget change means the email export
+> failed** (it should be impossible now that it is derived). Anything touching RDS or the state
+> bucket: stop and look.
 >
 > ---
 >
@@ -1227,10 +1301,10 @@ Skills being practiced deliberately, not just the app output:
   Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
   ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **The CI path is DONE (2026-08-07)** —
   `pitch-control-transform` applied, `dbt parse` guarding PRs and `dbt build` publishing Silver +
-  Gold daily. **The run ledger is BUILT (2026-08-08, ADR-0025 ✅ Accepted)** — writer, tests and
-  the transform IAM grant are in the tree, unshipped; the Silver model that pairs the records is
-  blocked until the first CI run produces files. The ADR-0013 identity marts stay blocked on the
-  app layer and are properly Wk-4+ work.
+  Gold daily. **The run ledger is LIVE (2026-08-08, PR #13, ADR-0025 ✅ Accepted)** — all three
+  jobs write paired records to `bronze/ops_runs/`, proven on the first attempt. **Remaining:**
+  `stg_ops__pipeline_runs`, the Silver model that pairs them — now unblocked. The ADR-0013
+  identity marts stay blocked on the app layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
 
