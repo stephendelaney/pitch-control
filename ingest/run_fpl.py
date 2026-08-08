@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import dlt
 
+import run_metrics
 from fpl.gameweeks import parse_backfill, select_live_gameweeks
 from fpl.source import _get, fpl_source
 
@@ -126,14 +127,9 @@ def main() -> int:
     print(f"\nOK — {elapsed:.1f}s")
 
     # Row counts per table, so a scheduled run's log answers "did it actually load anything?"
-    # without opening S3. This is the raw material for ADR-0012's ingest-freshness SLI.
-    try:
-        counts = pipeline.last_trace.last_normalize_info.row_counts
-        for table, count in sorted(counts.items()):
-            if not table.startswith("_dlt"):
-                print(f"  {table:24} {count:>7,} rows")
-    except AttributeError:
-        pass  # trace shape is dlt-internal; never fail a good load over reporting
+    # without opening S3 — and the same numbers persisted for ADR-0025's ledger, which is what
+    # turns them into ADR-0012's ingest-freshness SLI instead of a line in a log nobody reads.
+    run_metrics.report(pipeline)
 
     return 0
 

@@ -103,8 +103,25 @@ jobs:
           aws-region: us-east-1
           role-session-name: ingest-bronze-${{ github.run_id }}
 
+      # ADR-0025. The pair of records is the point: this one says the run began, the `always()`
+      # one below says how it ended, and a run that is hard-killed writes only the first — which
+      # is how "died without reporting" stays visible in an append-only store with no UPDATE.
+      #
+      # It sits after the credential step because writing the record needs one. The consequence
+      # is that a failure *earlier* than this (pip install, the unit tests) leaves no record at
+      # all: the ledger measures the load, not the runner's setup. GitHub's own run history
+      # already covers the setup half, so duplicating it here would buy nothing.
+      - name: Ledger - run started
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py start --pipeline fpl_bronze
+
       - name: Load FPL into Bronze
         env:
+          # Where run_metrics.py leaves the row counts and peak RSS for the finish record.
+          # RUNNER_TEMP, not the workspace: it must not be mistaken for a build artefact, and
+          # it is gone with the runner either way.
+          PITCH_CONTROL_RUN_METRICS: ${{ runner.temp }}/run-metrics.json
           # Presence of this variable is what switches the pipeline from a local dry run to
           # S3 (see ingest/run_fpl.py). If the repo variable were ever unset, the job would
           # quietly write to the runner's disk and report success — so assert it first.
@@ -129,6 +146,20 @@ jobs:
           else
             python run_fpl.py
           fi
+
+      # `job.status` is GitHub's vocabulary (success/failure/cancelled); ops_ledger.py maps it.
+      # `always()` so a failed or cancelled load still terminates its own record — an unpaired
+      # start should mean "the runner vanished", not "the load failed", and those want
+      # different responses.
+      - name: Ledger - run finished
+        if: always()
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: |
+          python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py finish \
+            --pipeline fpl_bronze \
+            --status "${{ job.status }}" \
+            --metrics "${{ runner.temp }}/run-metrics.json"
 
   postgres:
     name: Postgres -> Bronze
@@ -191,6 +222,14 @@ jobs:
       # Self-healing: if a previous run was hard-killed before its revoke, its rule is still
       # open. Sweeping here means the next scheduled run closes it without anyone noticing —
       # the scheduled janitor exists for the case where there *is* no next run.
+      # ADR-0025 — see the FPL job for why the pair matters and why this sits after the
+      # credential step. Placed before the SG open so the ledger records that this run started,
+      # even if opening the hole is what fails.
+      - name: Ledger - run started
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py start --pipeline postgres_bronze
+
       - name: Sweep orphaned ephemeral SG rules
         run: $GITHUB_WORKSPACE/.github/scripts/sg-ephemeral.sh sweep
 
@@ -216,6 +255,7 @@ jobs:
       - name: Load Postgres into Bronze
         env:
           PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+          PITCH_CONTROL_RUN_METRICS: ${{ runner.temp }}/run-metrics.json
         run: |
           set -euo pipefail
           if [ -z "${PITCH_CONTROL_LAKE_BUCKET}" ]; then
@@ -266,3 +306,17 @@ jobs:
       - name: Revoke ephemeral SG ingress
         if: always()
         run: $GITHUB_WORKSPACE/.github/scripts/sg-ephemeral.sh close
+
+      # Deliberately the LAST step, after the revoke. `job.status` accumulates as the job runs,
+      # so a revoke that fails — the ADR-0021 failure mode that leaves 5432 open — is folded
+      # into the recorded status only if this runs after it. Ordered the other way, the ledger
+      # would report success on precisely the run the maintainer most needs to find later.
+      - name: Ledger - run finished
+        if: always()
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: |
+          python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py finish \
+            --pipeline postgres_bronze \
+            --status "${{ job.status }}" \
+            --metrics "${{ runner.temp }}/run-metrics.json"

@@ -1,9 +1,79 @@
 # Project Status
 
 > Single source of truth for "where are we." Update this at the **end of every working session** —
-> it is what lets a fresh session orient in seconds. Last updated: **2026-08-07** (Wk 3, Gold + CI).
+> it is what lets a fresh session orient in seconds. Last updated: **2026-08-08** (Wk 3, run ledger).
 
 ## Current phase
+
+**▶️ Wk 3's last owed item is BUILT, not yet shipped (2026-08-08).** *(For Gold, the transform
+CI and the prior-season-points trap, see the collapsed Wk-3 block below.)* `ops.pipeline_runs` had sat
+empty since Wk 1 with nothing writing to it. It now has a writer — and the writer does not go to
+Postgres, which is the decision of this session and is recorded as
+[**ADR-0025**](adr/0025-pipeline-run-ledger-in-the-lake.md) — **✅ ratified 2026-08-08, and
+therefore immutable: supersede or amend, never rewrite.** The decision log is fully Accepted
+again — 0001–0025, nothing Proposed.
+
+**The question was not "how do we log a run" but "what does logging a run cost".** Three jobs
+need instrumenting and only one of them can reach RDS. Getting there costs the ADR-0019 SSM
+secret **and** an ADR-0021 /32 hole in front of a public database. For `ingest-bronze / fpl`
+that means surrendering the "no secret, no network setup" property it was built first to have.
+For `transform-build` it is worse: `pitch-control-transform` would have needed
+`ssm:GetParameter`, `kms:Decrypt`, `rds:DescribeDBInstances` and
+**`ec2:AuthorizeSecurityGroupIngress`** — the account's most sensitive grant, added to ADR-0020's
+deliberately-narrow identity, **to record that a build ran**. That is the system becoming less
+safe in order to report that it is working.
+
+So the ledger appends to the lake instead: **two records per run — `start` and `finish` — under
+`s3://<lake>/bronze/ops_runs/`, joined on a shared `run_key`.** No job needs a database
+credential. The transform role's whole exception is one `s3:PutObject` on one prefix.
+
+**Liveness comes from the pair, not from mutation.** An object store has no `UPDATE`, and this
+design does not want one — a hard-killed job writes a `start` and no `finish`, so "died without
+reporting" is a **missing record** rather than a row stuck at `status = 'running'` that nobody
+was alive to correct. Same fact, without depending on the dying process to report its own death.
+
+**🔴 The bug of this session was found by rehearsing the local path, and could not have been
+found in CI.** `start` and `finish` are two separate processes. In CI `GITHUB_RUN_ID` ties them
+together; locally there is nothing, so each invocation minted its own `run_key` and **the pair
+never joined** — the first rehearsal produced `local.…927cfdc9` and `local.…bc70a720` for one
+run. Worse, the test suite had asserted that two local identities differ, so the bug was written
+down as intended behaviour. Fixed with a `PITCH_CONTROL_LEDGER_RUN_KEY` override, and the
+unpaired case now warns rather than failing silently. **The general lesson: the CI path was
+correct throughout, which is exactly why the local one would have rotted unnoticed.**
+
+**Three numbers are structurally null, and each for a different reason** — recorded because a
+future session will otherwise read them as a broken writer:
+
+| Field | Job | Why |
+|---|---|---|
+| `rows_processed` | `transform_dbt` | **Measured, not assumed:** dbt-duckdb fills `adapter_response` with `{"_message": "OK"}` and no `rows_affected`, on *every* node type (checked across all 164 nodes of the 2026-08-06 build) |
+| `peak_mem_mb` | `transform_dbt` | dbt ran in a *previous* step, so its peak is invisible to the step writing the record. Recording this script's own footprint would be a plausible-looking wrong number |
+| both | any job that dies early | Coverage starts *after* the credential step — a failure in `pip install` or the unit tests writes no record at all. GitHub's run history already covers the setup half |
+
+**`getrusage`, not psutil** — and `requirements.txt` has been corrected accordingly. psutil
+reports memory *now*; the trip-wire wants the high-water mark, which `resource.getrusage` gives
+from the stdlib. The catch is that `ru_maxrss` is **kilobytes on Linux and bytes on macOS** — a
+1024× error that looks plausible on both, so the conversion is platform-switched. psutil stays,
+but only for dlt's own progress instrumentation.
+
+**Proven before shipping, three ways, since the first CI run will be the real test:**
+1. **End-to-end locally** against the live FPL API — both records paired on one `run_key`,
+   **1,061 rows and peak 87 MB** captured into the finish record.
+2. **The S3 branch against a stubbed `aws` CLI** (the sweep-fix technique from Wk 2): the
+   invocation is `aws s3 cp - s3://…/bronze/ops_runs/load_date=…/<run_key>.finish.jsonl`,
+   streaming the body over stdin so nothing touches the runner's disk.
+3. **The failure branch**: a stubbed `AccessDenied` emits `::warning::` and **exits 0**. A
+   telemetry write must not turn a good load red — same posture as the row-count reporting in
+   `run_fpl.py`. The log line was also fixed to stop printing `-> s3://…` on a write that
+   failed, which read as success.
+
+**58 tests, up from 39.** `pytest.ini` now puts `.github/scripts` on the path so the shared
+writer is testable; `ingest-check.yml` watches its path and imports `run_metrics`.
+
+📈 **Incidental: Bronze has drifted to 573 `elements`** (was 572 on 2026-08-07, 570 on 08-06) —
+ADR-0023's pre-season churn continuing. Gold refreshes itself now, so this needs no action.
+
+<details><summary>Prior phase — Wk 3, Gold live + transform CI shipped (2026-08-07)</summary>
 
 **✅ Wk 3 SUBSTANTIALLY DONE — Gold is LIVE in the lake (2026-08-05).** `transform/` now builds
 both layers: **16 models + 148 tests, `dbt build` green end-to-end against live Bronze in ~37s**,
@@ -628,6 +698,8 @@ delegable: **B6** (remote state, post-apply only).
 
 </details>
 
+</details>
+
 ## What exists
 
 - **`transform/`** — the Wk-3 dbt-duckdb project. **16 models + 148 tests** (141 schema, 7
@@ -644,8 +716,13 @@ delegable: **B6** (remote state, post-apply only).
   - **No `bronze_postgres` source, and no `event_live`** — both are empty in the lake, and
     DuckDB errors on a glob that matches zero files, so declaring either would be a broken
     build rather than a placeholder. They land with the app layer / the first played gameweek.
+- **`.github/scripts/ops_ledger.py`** — ADR-0025's run-ledger writer. Stdlib-only, uploads via
+  the `aws` CLI, shared by all three pipeline jobs across two Python environments (the same
+  one-definition argument that put `sg-ephemeral.sh` here). `ingest/run_metrics.py` is the dlt
+  side of the seam — row counts from the trace, peak RSS from `resource.getrusage`.
+  **Built and locally proven 2026-08-08; not yet run in CI.**
 - **`ingest/`** — both Wk-2 Bronze pipelines. dlt sources + the pure gameweek-selection rule +
-  **39 unit tests** + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
+  **58 unit tests** + [`ingest/README.md`](../ingest/README.md), which documents the Bronze
   contract Silver will read against (JSONL/gzip, Hive `load_date=` partition, nesting kept
   inline, and the split null rule). Both run via `.github/workflows/ingest-bronze.yml` as
   independent jobs; guarded on PRs by `ingest-check.yml`.
@@ -695,12 +772,75 @@ delegable: **B6** (remote state, post-apply only).
 | **0021** (Wk-2 ingest network path — A1) | ✅ Accepted — ratified 2026-07-04. Workflow-managed ephemeral SG ingress (runner /32 → run → `always()` revoke + janitor) for Wk 2; in-VPC Lambda (SG-to-SG) deferred to the ADR-0015 buildout where the paid-SSM-endpoint cost is decided. |
 | **0022** (public-repo strategy) | ✅ Accepted — ratified 2026-07-04. Stay public + build in public; Wk-5+ Jekyll Pages showcase layered on top (not a private-repo reveal); enabled by a secret/PII leakage gate before Wk 2 (B10). |
 | **0023** (Silver snapshot semantics) | ✅ Accepted — ratified 2026-08-05. Silver takes every row of the latest *committed* Bronze load (dlt `_dlt_loads`, `status = 0`), not the latest observation per key: a removed entity must disappear rather than linger, and a partial load must be structurally unselectable. Governs every staging model, including the Postgres ones when they arrive. |
+| **0025** (pipeline run ledger) | ✅ Accepted — ratified 2026-08-08. The run ledger appends to the lake (`bronze/ops_runs/`, two records per run joined on `run_key`) rather than writing RDS `ops.pipeline_runs`, because reaching RDS would cost the FPL job its no-secret property and would hand `pitch-control-transform` the SG-authorize grant — the system becoming less safe in order to report that it works. RDS's table stays for the app layer. |
 | **0024** (Gold grain) | ✅ Accepted — ratified 2026-08-06 (reviewed unremarkable). Gold models carry the grain the *question* has, not the source's: a two-sided fact is unpivoted to one row per participant (`fct_team_fixture`, 760 rows), and a model that windows over a sequence densifies it first (`mart_team_fixture_run`, 20 × 38 cross join) so a `rows` frame counts gameweeks by construction. Absence is an explicit flag, never a missing row. |
 
 ## Immediate next actions
 
-> ⏭️ **NEXT SESSION STARTS HERE — clean boundary. The CI gap is CLOSED and proven in
-> production.** `dbt` now runs in CI on both halves, and Gold refreshes itself daily.
+> ⏭️ **NEXT SESSION STARTS HERE — clean boundary. The run ledger is built, tested and
+> unshipped; nothing is half-edited.** Wk 3's last owed item has a writer.
+>
+> **✅ [ADR-0025](adr/0025-pipeline-run-ledger-in-the-lake.md) ratified 2026-08-08** — nothing is
+> awaiting a decision. The load-bearing claim is in *Context*: instrumenting all three jobs
+> against RDS would have required giving `pitch-control-transform`
+> `ec2:AuthorizeSecurityGroupIngress` to log that a build ran. The live constraint to remember
+> is in *Consequences*: **two ledgers now exist and the boundary between them is a convention,
+> not a constraint** — `bronze/ops_runs/` is CI's, `bronze/postgres/ops_pipeline_runs/` is the
+> snapshot of the app layer's RDS table, and a session that reads the wrong one finds an empty
+> table and no error.
+>
+> **✅ 1 — Committed** as `6a351e4` on branch `wk3-run-ledger` (2026-08-08). **`.github/workflows/`
+> is touched, so this bundle pushes via GitHub Desktop** (the CLI token lacks `workflow` scope).
+>
+> **2 — `terraform apply` NOW, from the branch, BEFORE the merge.** ⚠️ **The order is
+> load-bearing and the intuitive one is wrong.**
+>
+> Apply does not need `main`: it runs from the maintainer's laptop as `stephendelaney_IAM`
+> against S3 remote state, reading the **working tree**. The `main` pinning in this repo is on
+> the *role trust policies* — which CI runs may assume a role — not on who may apply Terraform.
+> There is no terraform-apply workflow; every apply has always been local.
+>
+> Merging first actively breaks the rollout, because this changeset touches
+> `.github/workflows/transform-build.yml`, **which is in that workflow's own `paths:` filter** —
+> so the merge *immediately triggers a build*. If the grant is not live when it fires, the two
+> ledger steps emit `::warning::` and exit 0: a **green run that silently writes no records**,
+> which reads as a broken writer rather than a missing grant. `iam_transform.tf` gains one
+> statement (`s3:PutObject` on `bronze/ops_runs/*`). The ingest role needs nothing — it already
+> holds `bronze/*`.
+>
+> ```bash
+> cd infra && terraform plan    # expect: 1 to change (aws_iam_role_policy.transform_lake)
+> terraform apply
+> ```
+>
+> Same order as the PR #11 rollout (*apply → set repo var → merge*), and for the same reason:
+> it makes the merge self-proving.
+>
+> **3 — Merge, then watch for the first records.** The `transform_dbt` pair arrives **within
+> minutes** — the merge triggers `transform-build` via the `paths:` filter above, so that run is
+> the first live proof. The two ingest pairs wait for the next `ingest-bronze` schedule (06:00
+> UTC nominal; expect it hours late — GitHub queues cron on free runners).
+>
+> ```bash
+> aws s3 ls --recursive "s3://$(cd infra && terraform output -raw lake_bucket)/bronze/ops_runs/"
+> ```
+>
+> Eventually **six objects** — a `.start.jsonl` and a `.finish.jsonl` for each of `fpl_bronze`,
+> `postgres_bronze`, `transform_dbt`. **An odd number is the interesting outcome**, not a broken
+> deploy: a start without a finish means a job died between them, and the unpaired `run_key`
+> names it.
+>
+> **4 — Then the Silver model, which is genuinely blocked until step 3 produces files.** DuckDB
+> errors on a glob matching zero files, so `stg_ops__pipeline_runs` cannot be declared before the
+> first records exist. It pairs the two events per `run_key`; ADR-0012's SLI and the ADR-0007
+> trip-wire models sit on top of it. ⚠️ **A run crossing midnight lands its two records in
+> different `load_date=` partitions** — pairing is on `run_key`, not the partition, so a model
+> that prunes to a single date will manufacture unpaired starts.
+>
+> ---
+>
+> **✅ Shipped 2026-08-07 — the CI gap is CLOSED and proven in production.** `dbt` now runs in CI
+> on both halves, and Gold refreshes itself daily.
 >
 > **✅ Shipped 2026-08-07 — `main` carries the transform CI (PR #11).** The rollout ran in the
 > documented order (apply → set repo var → merge), so the merge was self-proving:
@@ -726,21 +866,12 @@ delegable: **B6** (remote state, post-apply only).
 > equivalent drift (568 → 570) sat unpublished until a manual build. That gap is now closed
 > structurally, not by diligence.
 >
-> **⏭️ ONE STEP REMAINS from this rollout — make the dbt check a merge gate.** It has now
-> reported twice, so it is safe to require (a context that has never reported blocks a PR
-> forever — the reason `ingest-check` is deliberately not required):
->
-> ```bash
-> gh api -X PATCH repos/stephendelaney/pitch-control/branches/main/protection/required_status_checks \
->   -f 'contexts[]=fmt + validate (offline)' \
->   -f 'contexts[]=gitleaks secret scan' \
->   -f 'contexts[]=dbt parse (offline)'
-> ```
->
-> Verify with `gh api repos/stephendelaney/pitch-control/branches/main/protection/required_status_checks --jq .contexts`
-> — expect all three. **`transform-build` must NOT be added**: it carries `paths:` filters and
-> holds AWS credentials; requiring it would both block on unreported runs and put a
-> credentialed job on the PR path.
+> **✅ The dbt check is a merge gate — done, verified 2026-08-08.** Required contexts are now
+> `fmt + validate (offline)`, `gitleaks secret scan`, `dbt parse (offline)`.
+> **`transform-build` must NOT be added**: it carries `paths:` filters and holds AWS
+> credentials; requiring it would both block on unreported runs and put a credentialed job on
+> the PR path. Same reason `ingest-check` stays unrequired — a context that never runs never
+> reports, and the PR blocks forever.
 > Silver *and* Gold are live in S3 and `dbt build` is green (16 models, 148 tests). **The Wk-3
 > hardening block is fully closed:** `sha_pinning_required` `true`,
 > `dependabot_security_updates` `enabled`, `dependabot.yml` live, **`main` branch-protected**,
@@ -862,12 +993,13 @@ delegable: **B6** (remote state, post-apply only).
 >
 > **Then the rest of Wk 3 — two carried-forward items, both unblocked.**
 >
-> 1. **`ops.pipeline_runs` is still empty** — nothing writes to it. ADR-0012's SLIs and
->    ADR-0007's Fargate-overflow trip-wire both read from it, so the ingest **and** transform
->    jobs should start writing a row per run. `psutil` is **already in
->    `ingest/requirements.txt`** (so `peak_mem_mb` is fillable) — the writer is what is missing.
->    `stg_fpl__loads` already exposes `load_started_at` + `loaded_at`, which is the duration
->    half of the trip-wire for the ingest side.
+> 1. ~~**`ops.pipeline_runs` is still empty**~~ — **✅ addressed 2026-08-08, and the answer moved
+>    the target.** The writer exists, but it does not write to RDS: the ledger appends to
+>    `bronze/ops_runs/` instead ([ADR-0025](adr/0025-pipeline-run-ledger-in-the-lake.md),
+>    ✅ ratified 2026-08-08 — see *Current phase*). RDS
+>    `ops.pipeline_runs` stays in the schema for the app layer and is expected to remain empty
+>    until the app exists — **it is no longer a gap.** The note here that `psutil` made
+>    `peak_mem_mb` fillable was wrong in detail: it comes from `resource.getrusage`.
 > 2. **The Postgres half of the split null rule is still untested** — a `null` *inside* a JSONB
 >    payload is preserved, so a missing key there is **meaningful** and must not be read as
 >    null. It is the opposite of the column rule and there is no data to test it against until
@@ -1093,10 +1225,12 @@ Skills being practiced deliberately, not just the app output:
 - [ ] **Wk 3** — Silver/Gold with dbt-duckdb; tests + lineage; `ops.pipeline_runs`.
   **Silver done 2026-08-04, Gold done 2026-08-05** — `transform/`, 16 models + 148 tests,
   Parquet live at `s3://<lake>/silver/` and `s3://<lake>/gold/`; snapshot semantics recorded as
-  ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **Remaining:** `ops.pipeline_runs`
-  writes. **The CI path is DONE (2026-08-07)** — `pitch-control-transform` applied, `dbt parse`
-  guarding PRs and `dbt build` publishing Silver + Gold daily. The ADR-0013 identity marts stay blocked on the app
-  layer and are properly Wk-4+ work.
+  ADR-0023 and Gold grain as ADR-0024 (both ✅ Accepted). **The CI path is DONE (2026-08-07)** —
+  `pitch-control-transform` applied, `dbt parse` guarding PRs and `dbt build` publishing Silver +
+  Gold daily. **The run ledger is BUILT (2026-08-08, ADR-0025 ✅ Accepted)** — writer, tests and
+  the transform IAM grant are in the tree, unshipped; the Silver model that pairs the records is
+  blocked until the first CI run produces files. The ADR-0013 identity marts stay blocked on the
+  app layer and are properly Wk-4+ work.
 - [ ] **Wk 4** — Metabase dashboards on Gold + the manager-360 identity-stitching mart.
 - [ ] **Wk 5+** — CI/CD polish (OIDC deploys), elementary observability, error-budget in practice, CDP cohort experiment.
 

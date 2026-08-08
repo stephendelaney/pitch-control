@@ -13,9 +13,11 @@ dlt[filesystem,sql_database]==1.29.1
 # process) does not apply — this runs as a standalone script, not embedded in one.
 psycopg2-binary==2.9.12
 
-# Lets dlt collect memory stats instead of warning that it cannot. Not cosmetic: the seed
-# schema's `ops.pipeline_runs.peak_mem_mb` and the ADR-0007 amendment's Fargate-overflow
-# trip-wire (step duration + memory against the 15-min Lambda cap) both need this number, and
-# Wk 3 is when the jobs start writing that row. Cheaper to have it before it is needed than to
-# discover the column is unfillable.
+# Lets dlt collect memory stats instead of warning that it cannot.
+#
+# NB (2026-08-08): this was originally justified as the source of the ledger's `peak_mem_mb`
+# too. It is not — that comes from `resource.getrusage` in run_metrics.py, which reports the
+# *peak* RSS where psutil reports the current one, and is stdlib. psutil stays for dlt's own
+# progress instrumentation; it is no longer load-bearing for ADR-0025 or the ADR-0007
+# amendment's Fargate-overflow trip-wire.
 psutil==7.2.2
