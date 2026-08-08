@@ -22,7 +22,7 @@ cd ingest
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 
-pytest -q                            # 39 tests — no network, no database, no credentials
+pytest -q                            # 58 tests — no network, no database, no credentials
 ```
 
 `PITCH_CONTROL_LAKE_BUCKET` is the only switch between local and S3, for both jobs. Unset it
@@ -33,6 +33,44 @@ runner that is about to be destroyed.
 There is no `.dlt/secrets.toml` and there should never be one: S3 access comes from OIDC in
 CI and the maintainer's IAM profile locally, both via the environment
 ([ADR-0019](../docs/adr/0019-secret-management.md) — secrets never touch disk).
+
+## The run ledger
+
+Both jobs record themselves in the lake ([ADR-0025](../docs/adr/0025-pipeline-run-ledger-in-the-lake.md)):
+two records per run under `s3://<lake>/bronze/ops_runs/`, one written before the load and one
+written afterwards with `if: always()`. The writer is
+[`.github/scripts/ops_ledger.py`](../.github/scripts/ops_ledger.py) — shared with
+`transform-build`, stdlib-only, and uploading through the `aws` CLI so it needs no dependency
+from either environment's requirements file.
+
+`run_metrics.py` is this side's half of it. It reads the row counts out of dlt's trace and the
+peak RSS out of `resource.getrusage`, and leaves them in the file named by
+`PITCH_CONTROL_RUN_METRICS` for the finish step to pick up. Two things about that:
+
+- **`getrusage`, not psutil**, even though psutil is installed. psutil reports memory *now*; the
+  number the ADR-0007 trip-wire wants is the high-water mark. `ru_maxrss` is kilobytes on Linux
+  and **bytes** on macOS — a 1024× difference that looks plausible on either platform, so the
+  conversion is platform-switched.
+- **No file means the load never got far enough to report**, which is exactly when the finish
+  record matters. That is a warning and a record with nulls, never an exception.
+
+Rehearsing the whole seam locally needs one extra variable, and it is easy to miss:
+
+```bash
+export PITCH_CONTROL_LEDGER_DIR=/tmp/ledger            # write records to disk, not S3
+export PITCH_CONTROL_RUN_METRICS=/tmp/ledger/metrics.json
+export PITCH_CONTROL_LEDGER_RUN_KEY="local.$(date +%s)"  # ← without this, nothing pairs
+
+python ../.github/scripts/ops_ledger.py start --pipeline fpl_bronze
+python run_fpl.py --dry-run
+python ../.github/scripts/ops_ledger.py finish --pipeline fpl_bronze \
+    --status success --metrics "$PITCH_CONTROL_RUN_METRICS"
+```
+
+`start` and `finish` are two separate processes. In CI `GITHUB_RUN_ID` is what ties them
+together; locally there is nothing, so each invocation would mint its own `run_key` and the
+pair would never join. The script warns when it happens — but the failure is invisible in CI by
+construction, which is why it is written down here rather than left to be rediscovered.
 
 ## FPL → Bronze
 

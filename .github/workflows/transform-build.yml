@@ -108,6 +108,16 @@ jobs:
           fi
           echo "Building into s3://${PITCH_CONTROL_LAKE_BUCKET}/{silver,gold}/"
 
+      # ADR-0025. This job is why the ledger lives in the lake rather than in RDS: writing a row
+      # to `ops.pipeline_runs` would have meant giving the transform identity the RDS secret and
+      # the ability to open a hole in the database's security group — the account's most
+      # sensitive grant — purely to record that a build ran. One PutObject on a prefix it is
+      # already adjacent to costs nothing and widens nothing.
+      - name: Ledger - run started
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py start --pipeline transform_dbt
+
       - name: dbt build
         env:
           PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
@@ -118,20 +128,62 @@ jobs:
         run: dbt build
 
       # dbt exits 0 on a run where every model was skipped, so assert the artifact rather than
-      # trusting the exit code. run_results.json is what a future observability step (elementary,
-      # or the ops.pipeline_runs writer that Wk 3 still owes) would read.
+      # trusting the exit code. run_results.json is also where the ledger's numbers come from —
+      # this step is the transform half of what run_metrics.py does for the two dlt jobs.
       - name: Summarise the run
         if: always()
+        env:
+          PITCH_CONTROL_RUN_METRICS: ${{ runner.temp }}/run-metrics.json
         run: |
           test -s target/run_results.json || { echo "::error::no run_results.json"; exit 1; }
           python - <<'PY'
-          import json
+          import json, os
+          from collections import Counter
+
           with open("target/run_results.json") as f:
               r = json.load(f)
-          from collections import Counter
-          c = Counter(x["status"] for x in r["results"])
-          print(f"nodes: {len(r['results'])}  " + "  ".join(f"{k}={v}" for k, v in sorted(c.items())))
+
+          counts = Counter(x["status"] for x in r["results"])
+          print(f"nodes: {len(r['results'])}  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
           for x in r["results"]:
               if x["status"] not in ("success", "pass"):
                   print(f"::warning::{x['status']}: {x['unique_id']}")
+
+          # ⚠️ MEASURED, not assumed: dbt-duckdb populates `adapter_response` with
+          # `{"_message": "OK"}` and nothing else — no `rows_affected`, on any node type
+          # (checked across all 164 nodes of the 2026-08-06 build). So this sum is always 0
+          # today and `rows_processed` lands null, which is the honest answer rather than a
+          # fabricated one. Kept as a sum instead of a hardcoded null because the day the
+          # adapter starts reporting, the ledger should pick it up without anyone noticing —
+          # and because `0` and "unknown" must not be recorded as the same thing.
+          rows = sum(
+              (x.get("adapter_response") or {}).get("rows_affected") or 0 for x in r["results"]
+          )
+          # RUSAGE_CHILDREN, not SELF: dbt ran in a *previous* step, so its peak is not visible
+          # from this process at all. Recorded as null rather than as this script's own tiny
+          # footprint, which would be a plausible-looking wrong number — the same trap the
+          # prior-season points were. Getting the real figure needs `/usr/bin/time -v` around
+          # the build itself; not worth the fragility until the 15-min cap is actually in sight.
+          metrics = {
+              "rows_processed": rows or None,
+              "peak_mem_mb": None,
+              "detail": {
+                  "nodes": len(r["results"]),
+                  "node_status": dict(sorted(counts.items())),
+                  "elapsed_seconds": round(r.get("elapsed_time") or 0, 1),
+              },
+          }
+          with open(os.environ["PITCH_CONTROL_RUN_METRICS"], "w") as f:
+              json.dump(metrics, f, indent=2)
           PY
+
+      # Last step, so a failure in the summarise step above is itself reflected in the status.
+      - name: Ledger - run finished
+        if: always()
+        env:
+          PITCH_CONTROL_LAKE_BUCKET: ${{ vars.PITCH_CONTROL_LAKE_BUCKET }}
+        run: |
+          python $GITHUB_WORKSPACE/.github/scripts/ops_ledger.py finish \
+            --pipeline transform_dbt \
+            --status "${{ job.status }}" \
+            --metrics "${{ runner.temp }}/run-metrics.json"

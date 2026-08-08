@@ -21,12 +21,14 @@ on:
     paths:
       - "ingest/**"
       - ".github/scripts/sg-ephemeral.sh"
+      - ".github/scripts/ops_ledger.py"
       - ".github/workflows/ingest-check.yml"
   push:
     branches: [main]
     paths:
       - "ingest/**"
       - ".github/scripts/sg-ephemeral.sh"
+      - ".github/scripts/ops_ledger.py"
       - ".github/workflows/ingest-check.yml"
 
 permissions:
@@ -61,7 +63,7 @@ jobs:
       # not fully exercise — `fpl.source` in particular is only reached by the scheduled run.
       - name: Import check
         run: |
-          python -c "import run_fpl, fpl.source, run_postgres, postgres.source; \
+          python -c "import run_fpl, fpl.source, run_postgres, postgres.source, run_metrics; \
                      print('ingest modules import cleanly')"
 
       # The SG script is bash, so nothing above would notice a syntax error in it — and it is

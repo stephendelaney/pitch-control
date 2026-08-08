@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 import dlt
 
+import run_metrics
 from postgres.source import DEFAULT_SCHEMAS, PostgresTarget, postgres_source
 
 # Identical layout to the FPL half — see run_fpl.py for why `load_date=` is Hive-style and why
@@ -123,6 +124,10 @@ def main() -> int:
         # `app` may be empty for weeks. Exiting 0 keeps the scheduled run green — the ADR-0012
         # freshness SLI is what should notice a source that has gone quiet, not a red X here.
         print("\nNo tables found in the selected schemas — nothing to load.")
+        # Report zero explicitly rather than returning without writing metrics. The ledger
+        # cannot otherwise tell this outcome apart from a run that died before it could report,
+        # and those need opposite responses: this one is expected until the app layer exists.
+        run_metrics.write({})
         return 0
 
     destination = dlt.destinations.filesystem(bucket_url=bucket_url, layout=BRONZE_LAYOUT)
@@ -150,13 +155,7 @@ def main() -> int:
     print(f"\n{info}")
     print(f"\nOK — {elapsed:.1f}s")
 
-    try:
-        counts = pipeline.last_trace.last_normalize_info.row_counts
-        for table, count in sorted(counts.items()):
-            if not table.startswith("_dlt"):
-                print(f"  {table:24} {count:>7,} rows")
-    except AttributeError:
-        pass  # trace shape is dlt-internal; never fail a good load over reporting
+    run_metrics.report(pipeline)
 
     return 0
 

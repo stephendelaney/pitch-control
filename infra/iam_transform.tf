@@ -69,6 +69,24 @@ data "aws_iam_policy_document" "transform_lake" {
     resources = ["${aws_s3_bucket.lake.arn}/bronze/*"]
   }
 
+  # The one exception to "this role never writes Bronze" (ADR-0025). The transform job records
+  # its own run in the lake ledger, and that ledger lives under bronze/ because it is a source
+  # in its own right rather than something derived from one.
+  #
+  # It is a deliberately narrow exception and the narrowness is the whole argument: PutObject on
+  # a single prefix, no GetObject (this role writes records, it never reads the ledger back — a
+  # future SLI model reads it as Bronze like any other source), and no reach into bronze/fpl/ or
+  # bronze/postgres/. The alternative considered and rejected was writing the row to RDS
+  # `ops.pipeline_runs`, which would have required giving this identity the database secret and
+  # `ec2:AuthorizeSecurityGroupIngress` — the account's most sensitive grant — to log that a
+  # build ran. Widening a data-plane role to publish telemetry is the wrong direction.
+  statement {
+    sid       = "AppendRunLedger"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.lake.arn}/bronze/ops_runs/*"]
+  }
+
   statement {
     sid    = "WriteSilverAndGold"
     effect = "Allow"
