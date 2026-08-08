@@ -789,37 +789,45 @@ delegable: **B6** (remote state, post-apply only).
 > snapshot of the app layer's RDS table, and a session that reads the wrong one finds an empty
 > table and no error.
 >
-> **1 — Ship it.** Everything below is committed-ready and verified locally; the working tree is
-> the whole change. **`.github/workflows/` is touched, so this bundle pushes via GitHub Desktop**
-> (the CLI token lacks `workflow` scope), after committing in the Terminal so `gitleaks` runs.
+> **✅ 1 — Committed** as `6a351e4` on branch `wk3-run-ledger` (2026-08-08). **`.github/workflows/`
+> is touched, so this bundle pushes via GitHub Desktop** (the CLI token lacks `workflow` scope).
 >
-> ```bash
-> cd ~/Documents/GitHub/just-for-fun
-> git checkout -b wk3-run-ledger
-> git add -A && git commit   # then push via GitHub Desktop, open the PR
-> ```
+> **2 — `terraform apply` NOW, from the branch, BEFORE the merge.** ⚠️ **The order is
+> load-bearing and the intuitive one is wrong.**
 >
-> **2 — `terraform apply` before the first `transform-build` run, not after.** `iam_transform.tf`
-> gains one statement (`s3:PutObject` on `bronze/ops_runs/*`). Without it the transform job's two
-> ledger steps emit `::warning::` and exit 0 — the run stays green and the records silently never
-> appear, which is the failure mode to avoid discovering a week later. The ingest role needs
-> nothing: it already holds `bronze/*`.
+> Apply does not need `main`: it runs from the maintainer's laptop as `stephendelaney_IAM`
+> against S3 remote state, reading the **working tree**. The `main` pinning in this repo is on
+> the *role trust policies* — which CI runs may assume a role — not on who may apply Terraform.
+> There is no terraform-apply workflow; every apply has always been local.
+>
+> Merging first actively breaks the rollout, because this changeset touches
+> `.github/workflows/transform-build.yml`, **which is in that workflow's own `paths:` filter** —
+> so the merge *immediately triggers a build*. If the grant is not live when it fires, the two
+> ledger steps emit `::warning::` and exit 0: a **green run that silently writes no records**,
+> which reads as a broken writer rather than a missing grant. `iam_transform.tf` gains one
+> statement (`s3:PutObject` on `bronze/ops_runs/*`). The ingest role needs nothing — it already
+> holds `bronze/*`.
 >
 > ```bash
 > cd infra && terraform plan    # expect: 1 to change (aws_iam_role_policy.transform_lake)
 > terraform apply
 > ```
 >
-> **3 — Then watch for the first records.** After the next `ingest-bronze` (06:00 UTC nominal)
-> and `transform-build` (10:00 UTC nominal):
+> Same order as the PR #11 rollout (*apply → set repo var → merge*), and for the same reason:
+> it makes the merge self-proving.
+>
+> **3 — Merge, then watch for the first records.** The `transform_dbt` pair arrives **within
+> minutes** — the merge triggers `transform-build` via the `paths:` filter above, so that run is
+> the first live proof. The two ingest pairs wait for the next `ingest-bronze` schedule (06:00
+> UTC nominal; expect it hours late — GitHub queues cron on free runners).
 >
 > ```bash
 > aws s3 ls --recursive "s3://$(cd infra && terraform output -raw lake_bucket)/bronze/ops_runs/"
 > ```
 >
-> Expect **six objects** — a `.start.jsonl` and a `.finish.jsonl` for each of `fpl_bronze`,
-> `postgres_bronze`, `transform_dbt`. **Three starts and two finishes is the interesting
-> outcome**, not a broken deploy: it means a job died between them, and the unpaired `run_key`
+> Eventually **six objects** — a `.start.jsonl` and a `.finish.jsonl` for each of `fpl_bronze`,
+> `postgres_bronze`, `transform_dbt`. **An odd number is the interesting outcome**, not a broken
+> deploy: a start without a finish means a job died between them, and the unpaired `run_key`
 > names it.
 >
 > **4 — Then the Silver model, which is genuinely blocked until step 3 produces files.** DuckDB
